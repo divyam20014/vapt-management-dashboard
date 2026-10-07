@@ -62,3 +62,9 @@ class DuplicateDecision(str, Enum):
     PENDING = "Pending"
     MERGED = "Merged"
     KEPT_SEPARATE = "Kept Separate"
+
+
+class UserRole(str, Enum):
+    ADMIN = "Admin"
+    SECURITY_ANALYST = "Security Analyst"
+    VIEWER = "Viewer"

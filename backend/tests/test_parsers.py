@@ -301,3 +301,52 @@ def test_malformed_xml_is_a_parse_error():
 def test_non_utf8_content_is_a_parse_error():
     with pytest.raises(ReportParseError, match="UTF-8"):
         detect_parser(text_report("x.json", b"\xff\xfe\x00{"))
+
+
+# --- ZAP HTML completeness (a truncated report must never look like a clean scan) ----------
+
+import re as _re
+
+_RESULTS_TABLE = _re.compile(r'<table class="results">.*?</table>', _re.S)
+
+
+def _zap_html() -> str:
+    return ZAP_HTML.read_text(encoding="utf-8")
+
+
+def test_truncated_zap_html_is_rejected():
+    html = _zap_html()
+    tables = list(_RESULTS_TABLE.finditer(html))
+    assert len(tables) == 11
+    last = tables[-1]
+    truncated = html[: last.start()] + html[last.end():]  # drop the final alert table
+    file = text_report("zap.html", truncated)
+    with pytest.raises(ReportParseError, match=r"appears incomplete \(Informational: 4 declared, 3 found\)"):
+        detect_parser(file).parse(file)
+
+
+def test_zap_html_cut_off_mid_report_is_rejected():
+    html = _zap_html()
+    cut = html[: list(_RESULTS_TABLE.finditer(html))[5].start()]  # file ends after five alert tables
+    file = text_report("zap.html", cut)
+    with pytest.raises(ReportParseError, match="appears incomplete"):
+        detect_parser(file).parse(file)
+
+
+def test_zap_html_without_summary_table_is_rejected():
+    html = "<html><head><title>ZAP Scanning Report</title></head><body>zaproxy<script>alert(1)</script></body></html>"
+    file = text_report("zap.html", html)
+    with pytest.raises(ReportParseError, match="Summary of Alerts"):
+        detect_parser(file).parse(file)
+
+
+def test_genuine_zero_alert_zap_html_is_accepted():
+    html = _RESULTS_TABLE.sub("", _zap_html())
+    # Set every risk count in the summary table to 0, as ZAP does for a scan with no alerts.
+    start = html.index("Summary of Alerts")
+    end = html.index("</table>", start)
+    summary = _re.sub(r"<div>\d+</div>", "<div>0</div>", html[start:end])
+    html = html[:start] + summary + html[end:]
+    file = text_report("zap.html", html)
+    parsed = detect_parser(file).parse(file)
+    assert parsed.records == []

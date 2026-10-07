@@ -27,6 +27,11 @@ class ScanRead(BaseModel):
     processing_error: str | None
 
 
+class ScanDetail(ScanRead):
+    previous_scan: ScanRead | None
+    next_scan: ScanRead | None
+
+
 class SeverityCounts(BaseModel):
     critical: int = 0
     high: int = 0

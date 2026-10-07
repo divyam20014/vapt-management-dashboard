@@ -206,6 +206,43 @@ _HTML_INSTANCE_FIELDS = {
     "Other Info": "otherinfo",
 }
 _HTML_GENERATED = re.compile(r"Generated on\s+(.+)")
+_SUMMARY_RISK_LEVELS = ("High", "Medium", "Low", "Informational")
+
+
+def _summary_counts(soup: BeautifulSoup) -> dict[str, int] | None:
+    """Per-risk alert counts from the report's own "Summary of Alerts" table, or None if absent."""
+    heading = next((h for h in soup.find_all("h3") if h.get_text(strip=True) == "Summary of Alerts"), None)
+    table = heading.find_next("table") if heading else None
+    if table is None:
+        return None
+    counts: dict[str, int] = {}
+    for row in table.find_all("tr"):
+        cells = row.find_all("td")
+        if len(cells) != 2:
+            continue
+        label, value = cells[0].get_text(strip=True), cells[1].get_text(strip=True)
+        if label in _SUMMARY_RISK_LEVELS and value.isdigit():
+            counts[label] = int(value)
+    return counts or None
+
+
+def _check_complete(soup: BeautifulSoup, alerts: list[dict[str, Any]]) -> None:
+    """An HTML report must contain every alert its own summary declares.
+
+    Without this, a truncated report (or a different ZAP HTML template) would parse as a clean scan,
+    and every finding of the previous scan would wrongly appear resolved.
+    """
+    declared = _summary_counts(soup)
+    if declared is None:
+        raise ReportParseError(
+            'The ZAP HTML report has no "Summary of Alerts" table, so its completeness cannot be verified. '
+            "Upload the traditional ZAP HTML report, or the JSON/XML report."
+        )
+    found = {level: sum(1 for alert in alerts if alert["risk"] == level) for level in _SUMMARY_RISK_LEVELS}
+    missing = {level: (declared[level], found[level]) for level in declared if declared[level] != found[level]}
+    if missing:
+        detail = ", ".join(f"{level}: {expected} declared, {actual} found" for level, (expected, actual) in missing.items())
+        raise ReportParseError(f"The ZAP HTML report appears incomplete ({detail}). No findings were imported.")
 
 
 class ZapHtmlParser(BaseReportParser):
@@ -249,6 +286,8 @@ class ZapHtmlParser(BaseReportParser):
                     current = None
                     alert[_HTML_ALERT_FIELDS[label]] = tds[1].get_text("\n", strip=True)
             alerts.append(alert)
+
+        _check_complete(soup, alerts)
 
         warnings: list[str] = []
         generated = None

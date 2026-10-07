@@ -2,6 +2,7 @@ import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
 import LoadingState from '../components/states/LoadingState';
 import ErrorState from '../components/states/ErrorState';
+import UsersCard from '../components/users/UsersCard';
 import { settingsService } from '../services/settingsService';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -12,7 +13,10 @@ export default function SettingsPage() {
 
   return (
     <>
-      <PageHeader title="Settings" description="Current server configuration (read-only; set through environment variables)." />
+      <PageHeader title="Settings" description="Users, and the current server configuration." />
+      <div className="mb-6">
+        <UsersCard />
+      </div>
       <Card title="Application configuration" bodyClassName="">
         {error ? (
           <ErrorState title="Settings could not be loaded" message={error.message} onRetry={reload} />

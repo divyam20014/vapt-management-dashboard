@@ -1,0 +1,2 @@
+# Scanner outputs are test fixtures: keep them byte-for-byte as produced (no line-ending conversion).
+sample-reports/** -text

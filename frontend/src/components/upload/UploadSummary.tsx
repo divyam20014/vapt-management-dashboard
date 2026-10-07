@@ -68,7 +68,7 @@ export default function UploadSummary({ result }: { result: UploadResult }) {
           Findings from different tools that may describe the same issue. They are recorded for review and were not merged.
         </p>
         {result.potential_duplicates.length > 0 && (
-          <div className="mt-3 overflow-x-auto rounded-md border border-slate-200">
+          <div className="relative mt-3 overflow-x-auto rounded-md border border-slate-200">
             <table className="min-w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs font-medium tracking-wide text-slate-500 uppercase">
                 <tr>

@@ -4,10 +4,14 @@ import userEvent from '@testing-library/user-event';
 import { renderApp } from '../test/render';
 import { dashboardService } from '../services/dashboardService';
 import { projectService } from '../services/projectService';
+import { findingService } from '../services/findingService';
+import { scanService } from '../services/scanService';
 import { buildSummary, pageOf } from '../test/fixtures';
 
 vi.mock('../services/dashboardService');
 vi.mock('../services/projectService');
+vi.mock('../services/findingService');
+vi.mock('../services/scanService');
 
 const NAV_LABELS = ['Dashboard', 'Projects', 'Findings', 'Critical & High', 'Scans', 'Reports', 'Upload Report', 'Settings'];
 
@@ -15,6 +19,10 @@ describe('navigation', () => {
   beforeEach(() => {
     vi.mocked(dashboardService.getSummary).mockResolvedValue(buildSummary());
     vi.mocked(projectService.list).mockResolvedValue(pageOf([]));
+    vi.mocked(findingService.list).mockResolvedValue(pageOf([]));
+    vi.mocked(findingService.facets).mockResolvedValue({ source_tools: [], categories: [] });
+    vi.mocked(scanService.list).mockResolvedValue(pageOf([]));
+    vi.mocked(dashboardService.getTrends).mockResolvedValue({ granularity: 'day', points: [] });
   });
 
   it('renders every sidebar item in order', () => {
@@ -35,10 +43,10 @@ describe('navigation', () => {
 
     await user.click(within(nav).getByRole('link', { name: 'Findings' }));
     expect(screen.getByRole('heading', { level: 1, name: 'Findings' })).toBeInTheDocument();
-    expect(screen.getByText('Findings list not available yet')).toBeInTheDocument();
+    expect(await screen.findByText('No findings available')).toBeInTheDocument();
 
     await user.click(within(nav).getByRole('link', { name: 'Scans' }));
-    expect(screen.getByText('Scan history view not available yet')).toBeInTheDocument();
+    expect(await screen.findByText('No scans available')).toBeInTheDocument();
   });
 
   it('quick action "New Project" opens the create form', async () => {

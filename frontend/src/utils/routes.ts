@@ -10,6 +10,10 @@ export const ROUTES = {
 } as const;
 
 export const projectPath = (id: number) => `${ROUTES.projects}/${id}`;
+export const findingPath = (id: number) => `${ROUTES.findings}/${id}`;
+export const scanPath = (id: number) => `${ROUTES.scans}/${id}`;
+export const COMPARE_PATH = `${ROUTES.scans}/compare`;
+export const comparePath = (baseId: number, compareId: number) => `${COMPARE_PATH}?base=${baseId}&compare=${compareId}`;
 
 /** Opens the create-project modal on the Projects page. */
 export const NEW_PROJECT_PATH = `${ROUTES.projects}?new=1`;

@@ -3,7 +3,7 @@ import { FileText } from 'lucide-react';
 import ScanStatusBadge from './ScanStatusBadge';
 import SeverityBreakdown from './SeverityBreakdown';
 import { formatDateTime } from '../../utils/format';
-import { projectPath } from '../../utils/routes';
+import { projectPath, scanPath } from '../../utils/routes';
 import type { Scan } from '../../types/scan';
 
 interface ScanListProps {
@@ -21,9 +21,9 @@ export default function ScanList({ scans, showProject = false }: ScanListProps) 
             <div className="flex min-w-0 items-start gap-3">
               <FileText className="mt-0.5 size-4 shrink-0 text-slate-400" aria-hidden />
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-slate-900" title={scan.original_filename}>
+                <Link to={scanPath(scan.id)} className="block truncate text-sm font-medium text-slate-900 hover:text-teal-700" title={scan.original_filename}>
                   {scan.scan_name}
-                </p>
+                </Link>
                 <p className="truncate text-xs text-slate-500">
                   {showProject && (
                     <>

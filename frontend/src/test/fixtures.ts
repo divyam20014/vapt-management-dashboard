@@ -2,6 +2,7 @@ import type { Project } from '../types/project';
 import type { Page } from '../types/api';
 import type { DashboardSummary } from '../types/dashboard';
 import type { Scan, SeverityCounts } from '../types/scan';
+import { FINDING_STATUSES } from '../utils/constants';
 
 /** Test-only API response builders. Never imported by application code. */
 export function buildProject(overrides: Partial<Project> = {}): Project {
@@ -28,15 +29,30 @@ export const NO_FINDINGS: SeverityCounts = { critical: 0, high: 0, medium: 0, lo
 
 export function buildSummary(overrides: Partial<DashboardSummary> = {}): DashboardSummary {
   return {
+    project_id: null,
     project_count: 0,
-    projects_by_status: [],
-    projects_by_environment: [],
-    recent_projects: [],
     scan_count: 0,
     failed_scan_count: 0,
     finding_count: 0,
     findings_by_severity: NO_FINDINGS,
+    active_by_severity: NO_FINDINGS,
+    status_summary: FINDING_STATUSES.map((status) => ({ status, count: 0 })),
+    indicators: {
+      active_findings: 0,
+      active_critical_high: 0,
+      unassigned_active: 0,
+      resolved_last_30_days: 0,
+      oldest_active_critical_high: null,
+    },
+    findings_by_project: [],
+    top_categories: [],
+    top_cwes: [],
     recent_scans: [],
+    latest_scan: null,
+    recent_critical_high: [],
+    projects_by_status: [],
+    projects_by_environment: [],
+    recent_projects: [],
     ...overrides,
   };
 }

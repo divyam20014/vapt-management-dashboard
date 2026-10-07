@@ -42,6 +42,9 @@ def init_db(engine: Engine, settings: Settings) -> None:
     import app.models  # noqa: F401  (register models on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
+    from app.database.migrations import upgrade
+
+    upgrade(engine)
     logger.info("Database initialised (%d tables)", len(Base.metadata.tables))
 
 

@@ -12,12 +12,13 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.errors import AppError, NotFoundError
 from app.database.base import utcnow
-from app.models import Finding, FindingOccurrence, Scan, ScanStatus, Severity
+from app.models import Finding, FindingOccurrence, FindingStatus, FindingStatusHistory, Scan, ScanStatus, Severity, User
 from app.parsers.base import NormalizedFinding, ReportFile, ReportParseError, UnsupportedReportError
 from app.parsers.normalization import fingerprint
 from app.parsers.registry import detect_parser
 from app.schemas.scan import PotentialDuplicateRead, ScanRead, SeverityCounts, UploadResult
-from app.services import duplicate_service, upload_validation
+from app.services import audit_service, duplicate_service, upload_validation
+from app.services.audit_service import AuditAction
 from app.services.project_service import get_project
 
 logger = logging.getLogger(__name__)
@@ -40,26 +41,6 @@ class DuplicateUploadError(AppError):
 class ProcessingFailedError(AppError):
     status_code = 500
     code = "processing_failed"
-
-
-def list_project_scans(db: Session, project_id: int, page: int, page_size: int) -> tuple[list[Scan], int]:
-    get_project(db, project_id)
-    total = db.scalar(select(func.count()).select_from(Scan).where(Scan.project_id == project_id)) or 0
-    items = db.scalars(
-        select(Scan)
-        .where(Scan.project_id == project_id)
-        .order_by(Scan.uploaded_at.desc(), Scan.id.desc())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    ).all()
-    return list(items), total
-
-
-def get_scan(db: Session, scan_id: int) -> Scan:
-    scan = db.get(Scan, scan_id)
-    if scan is None:
-        raise NotFoundError(f"Scan {scan_id} was not found.")
-    return scan
 
 
 def _find_previous_upload(db: Session, project_id: int, file_hash: str) -> Scan | None:
@@ -114,7 +95,7 @@ def _new_finding(project_id: int, scan_id: int, key: str, nf: NormalizedFinding,
 
 def _record_failed_scan(
     db: Session, *, project_id: int, scan_name: str, filename: str, stored_path: str, file_hash: str,
-    message: str, parser=None, uploaded_at: datetime,
+    message: str, parser=None, uploaded_at: datetime, actor: User | None = None,
 ) -> Scan:
     scan = Scan(
         project_id=project_id,
@@ -129,6 +110,8 @@ def _record_failed_scan(
         processing_error=message,
     )
     db.add(scan)
+    db.flush()
+    audit_service.record(db, actor, AuditAction.REPORT_FAILED, "scan", scan.id, {"project_id": project_id, "file": filename, "reason": message})
     db.commit()
     db.refresh(scan)
     logger.warning("Scan recorded as failed id=%s project=%s reason=%s", scan.id, project_id, message)
@@ -146,6 +129,7 @@ def process_upload(
     scan_name: str | None = None,
     provided_scan_date: datetime | None = None,
     allow_duplicate: bool = False,
+    actor: User | None = None,
 ) -> UploadResult:
     project = get_project(db, project_id)
 
@@ -193,7 +177,7 @@ def process_upload(
     if error is not None:
         failed = _record_failed_scan(
             db, project_id=project.id, scan_name=scan_name, filename=name, stored_path=stored.relative_path,
-            file_hash=file_hash, message=error.message, parser=parser, uploaded_at=uploaded_at,
+            file_hash=file_hash, message=error.message, parser=parser, uploaded_at=uploaded_at, actor=actor,
         )
         error.details = {"scan_id": failed.id}
         raise error
@@ -262,7 +246,24 @@ def process_upload(
             setattr(scan, column, severities.get(severity, 0))
 
         db.flush()
+        # The timeline of every new finding starts with its detection.
+        for finding in new_findings:
+            db.add(
+                FindingStatusHistory(
+                    finding_id=finding.id,
+                    old_status=None,
+                    new_status=FindingStatus.OPEN,
+                    changed_by=actor.id if actor else None,
+                    changed_at=uploaded_at,
+                    comment=f'Detected in scan "{scan_name}" (#{scan.id}).',
+                )
+            )
         duplicates = duplicate_service.detect_potential_duplicates(db, project.id, new_findings, scan.id)
+        audit_service.record(
+            db, actor, AuditAction.REPORT_UPLOADED, "scan", scan.id,
+            {"project_id": project.id, "file": name, "parser": parser.name, "findings": len(in_this_scan),
+             "new_findings": len(new_findings), "potential_duplicates": len(duplicates), "allow_duplicate": allow_duplicate},
+        )
         db.commit()
     except SQLAlchemyError:
         db.rollback()
@@ -271,7 +272,7 @@ def process_upload(
             failed = _record_failed_scan(
                 db, project_id=project.id, scan_name=scan_name, filename=name, stored_path=stored.relative_path,
                 file_hash=file_hash, message="A database error occurred while saving the findings. No findings were saved.",
-                parser=parser, uploaded_at=uploaded_at,
+                parser=parser, uploaded_at=uploaded_at, actor=actor,
             )
             details = {"scan_id": failed.id}
         except SQLAlchemyError:

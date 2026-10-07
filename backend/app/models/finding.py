@@ -5,7 +5,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, UTCDateTime, utcnow
 from app.models.enums import DuplicateConfidence, DuplicateDecision, FindingStatus, Severity
+from app.models.project import Project
+from app.models.scan import Scan
 from app.models.types import string_enum
+from app.models.user import User
 
 
 class Finding(Base):
@@ -48,11 +51,14 @@ class Finding(Base):
     # Scanner-specific fields with no dedicated column (e.g. ZAP confidence/WASC, Nuclei matcher-name/type).
     source_metadata: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[FindingStatus] = mapped_column(string_enum(FindingStatus), nullable=False, default=FindingStatus.OPEN)
-    assigned_to: Mapped[str | None] = mapped_column(String(200))
+    assigned_to: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     first_detected: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     last_detected: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    project: Mapped[Project] = relationship(lazy="joined")
+    assignee: Mapped[User | None] = relationship(lazy="joined")
 
     __table_args__ = (
         UniqueConstraint("project_id", "finding_key", name="uq_findings_project_key"),
@@ -63,6 +69,8 @@ class Finding(Base):
         Index("ix_findings_finding_key", "finding_key"),
         Index("ix_findings_source_tool", "source_tool"),
         Index("ix_findings_endpoint", "project_id", "endpoint"),
+        Index("ix_findings_assigned_to", "assigned_to"),
+        Index("ix_findings_last_detected", "last_detected"),
     )
 
 
@@ -85,6 +93,7 @@ class FindingOccurrence(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
 
     finding: Mapped[Finding] = relationship()
+    scan: Mapped[Scan] = relationship(lazy="joined")
 
     __table_args__ = (
         Index("ix_occurrences_finding_id", "finding_id"),

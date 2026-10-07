@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { Menu, Plus, ShieldAlert, Upload } from 'lucide-react';
 import { buttonClasses } from '../ui/Button';
+import ActingUserSelect from './ActingUserSelect';
 import { NEW_PROJECT_PATH, ROUTES } from '../../utils/routes';
 
 interface TopBarProps {
@@ -19,8 +20,10 @@ export default function TopBar({ onOpenMenu }: TopBarProps) {
         <Menu className="size-5" aria-hidden />
       </button>
 
+      <ActingUserSelect />
+
       <div className="ml-auto flex items-center gap-2" aria-label="Quick actions">
-        <div className="hidden items-center gap-2 md:flex">
+        <div className="hidden items-center gap-2 xl:flex">
           <Link to={`${ROUTES.criticalHigh}?severity=Critical`} className={buttonClasses('ghost', 'sm')}>
             <ShieldAlert className="size-4 text-red-600" aria-hidden />
             View Critical
@@ -33,11 +36,11 @@ export default function TopBar({ onOpenMenu }: TopBarProps) {
         <Link to={ROUTES.upload} className={buttonClasses('secondary', 'sm')}>
           <Upload className="size-4" aria-hidden />
           <span className="hidden sm:inline">Upload VAPT Report</span>
-          <span className="sm:hidden">Upload</span>
+          <span className="sr-only sm:hidden">Upload VAPT Report</span>
         </Link>
         <Link to={NEW_PROJECT_PATH} className={buttonClasses('primary', 'sm')}>
           <Plus className="size-4" aria-hidden />
-          New Project
+          <span className="sr-only sm:not-sr-only">New Project</span>
         </Link>
       </div>
     </header>

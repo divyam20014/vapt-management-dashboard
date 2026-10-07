@@ -7,6 +7,22 @@ export const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+/**
+ * The user the UI is acting as, sent with every request until authentication exists (Phase 6).
+ * It identifies who made a change; it is not authentication.
+ */
+export const ACTING_USER_HEADER = 'X-Acting-User';
+let actingUserId: number | null = null;
+
+export function setActingUserId(id: number | null) {
+  actingUserId = id;
+}
+
+api.interceptors.request.use((config) => {
+  if (actingUserId !== null) config.headers.set(ACTING_USER_HEADER, String(actingUserId));
+  return config;
+});
+
 interface ErrorEnvelope {
   error?: { code?: string; message?: string; details?: unknown };
 }

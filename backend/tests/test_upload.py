@@ -265,10 +265,14 @@ def test_database_failure_rolls_back_all_findings(client, project, sqlite_rows, 
 # --- scans API, dashboard, project deletion ------------------------------------------------
 
 def test_project_scans_are_listed_newest_first(client, project):
-    first = upload(client, project["id"], ZAP_JSON).json()["scan"]["id"]
-    second = upload(client, project["id"], NUCLEI_JSONL).json()["scan"]["id"]
+    zap = upload(client, project["id"], ZAP_JSON).json()["scan"]["id"]  # scanned 10:06:46, uploaded first
+    nuclei = upload(client, project["id"], NUCLEI_JSONL).json()["scan"]["id"]  # scanned 10:05:38, uploaded second
     body = client.get(f"/api/projects/{project['id']}/scans").json()
-    assert [scan["id"] for scan in body["items"]] == [second, first]
+    # Date-wise: newest scan date first, regardless of upload order.
+    assert [scan["id"] for scan in body["items"]] == [zap, nuclei]
+    by_upload = client.get("/api/scans", params={"project_id": project["id"], "sort_by": "uploaded_at"}).json()
+    assert [scan["id"] for scan in by_upload["items"]] == [nuclei, zap]
+    first = zap
     assert body["total"] == 2
     assert client.get(f"/api/scans/{first}").json()["scanner"] == "OWASP ZAP"
     assert client.get("/api/scans/999").status_code == 404
@@ -317,3 +321,17 @@ def test_project_with_reports_cannot_be_deleted(client, project, sqlite_rows):
 
 def test_settings_lists_allowed_extensions(client):
     assert client.get("/api/settings").json()["allowed_extensions"] == [".html", ".htm", ".json", ".jsonl", ".xml", ".txt"]
+
+
+def test_truncated_zap_html_upload_is_recorded_as_failed(client, project, sqlite_rows, settings):
+    import re
+
+    html = ZAP_HTML.read_text(encoding="utf-8")
+    last = list(re.finditer(r'<table class="results">.*?</table>', html, re.S))[-1]
+    response = upload(client, project["id"], name="cut.html", content=(html[: last.start()] + html[last.end():]).encode(), content_type="text/html")
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "parse_error" and "appears incomplete" in error["message"]
+    assert sqlite_rows("SELECT processing_status, total_findings FROM scans") == [("Failed", 0)]
+    assert count(sqlite_rows, "findings") == 0
+    assert len(stored_files(settings)) == 1  # original kept for investigation

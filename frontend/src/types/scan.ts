@@ -20,6 +20,23 @@ export interface Scan {
   processing_error: string | null;
 }
 
+export interface ScanDetail extends Scan {
+  previous_scan: Scan | null;
+  next_scan: Scan | null;
+}
+
+export interface ScanQuery {
+  page: number;
+  page_size: number;
+  project_id?: number[];
+  scanner?: string[];
+  status?: string[];
+  date_from?: string;
+  date_to?: string;
+  sort_by?: 'scan_time' | 'uploaded_at' | 'name' | 'total_findings';
+  sort_order?: 'asc' | 'desc';
+}
+
 export interface SeverityCounts {
   critical: number;
   high: number;

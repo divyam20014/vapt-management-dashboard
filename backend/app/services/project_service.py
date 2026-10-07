@@ -6,8 +6,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, NotFoundError
-from app.models import Project, ProjectEnvironment, ProjectStatus, Scan
+from app.models import Project, ProjectEnvironment, ProjectStatus, Scan, User
 from app.schemas.project import ProjectCreate, ProjectUpdate
+from app.services import audit_service
+from app.services.audit_service import AuditAction
 
 logger = logging.getLogger(__name__)
 
@@ -78,12 +80,14 @@ def get_project(db: Session, project_id: int) -> Project:
     return project
 
 
-def create_project(db: Session, data: ProjectCreate) -> Project:
+def create_project(db: Session, data: ProjectCreate, actor: User | None = None) -> Project:
     if _name_taken(db, data.name):
         raise _duplicate_name_error(data.name)
     project = Project(**data.model_dump())
     db.add(project)
     try:
+        db.flush()
+        audit_service.record(db, actor, AuditAction.PROJECT_CREATED, "project", project.id, {"name": project.name})
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -93,13 +97,14 @@ def create_project(db: Session, data: ProjectCreate) -> Project:
     return project
 
 
-def update_project(db: Session, project_id: int, data: ProjectUpdate) -> Project:
+def update_project(db: Session, project_id: int, data: ProjectUpdate, actor: User | None = None) -> Project:
     project = get_project(db, project_id)
     changes = data.model_dump(exclude_unset=True)
     if "name" in changes and _name_taken(db, changes["name"], exclude_id=project_id):
         raise _duplicate_name_error(changes["name"])
     for field, value in changes.items():
         setattr(project, field, value)
+    audit_service.record(db, actor, AuditAction.PROJECT_UPDATED, "project", project.id, {"fields": sorted(changes)})
     try:
         db.commit()
     except IntegrityError as exc:
@@ -110,7 +115,7 @@ def update_project(db: Session, project_id: int, data: ProjectUpdate) -> Project
     return project
 
 
-def delete_project(db: Session, project_id: int) -> None:
+def delete_project(db: Session, project_id: int, actor: User | None = None) -> None:
     project = get_project(db, project_id)
     scan_count = db.scalar(select(func.count()).select_from(Scan).where(Scan.project_id == project_id)) or 0
     if scan_count:
@@ -119,5 +124,6 @@ def delete_project(db: Session, project_id: int) -> None:
             "Archive it instead to keep its reports and findings."
         )
     db.delete(project)
+    audit_service.record(db, actor, AuditAction.PROJECT_DELETED, "project", project_id, {"name": project.name})
     db.commit()
     logger.info("Project deleted id=%s name=%r", project_id, project.name)

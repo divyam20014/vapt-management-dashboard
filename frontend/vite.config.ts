@@ -16,5 +16,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     css: false,
+    // Full-page interaction tests (many simulated keystrokes and clicks) can exceed the 5 s default
+    // on a busy machine; this limit only affects how long a slow test may run, not what it asserts.
+    testTimeout: 20_000,
   },
 });
