@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+backend/venv/
+.venv/
+venv/
+.pytest_cache/
+
+# Node
+node_modules/
+frontend/dist/
+
+# Environment
+.env
+backend/.env
+
+# Application data (runtime only; keep directory placeholders)
+data/*
+!data/uploads/
+data/uploads/*
+!data/uploads/.gitkeep
+exports/*
+!exports/.gitkeep
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

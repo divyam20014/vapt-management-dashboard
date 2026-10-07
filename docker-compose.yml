@@ -1,0 +1,22 @@
+services:
+  vapt-dashboard:
+    build: .
+    image: vapt-management-dashboard:latest
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite:///./data/vapt.db
+      UPLOAD_DIRECTORY: ./data/uploads
+      EXPORT_DIRECTORY: ./exports
+      MAX_UPLOAD_SIZE_MB: "50"
+      LOG_LEVEL: INFO
+    volumes:
+      # SQLite database and original uploaded reports persist on the host.
+      - ./data:/app/data
+      - ./exports:/app/exports
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped

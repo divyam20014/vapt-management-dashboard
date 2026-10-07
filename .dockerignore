@@ -1,0 +1,12 @@
+.git
+**/node_modules
+**/__pycache__
+**/.pytest_cache
+backend/venv
+backend/tests
+backend/.env
+.env
+frontend/dist
+data
+exports
+phase-prompts
