@@ -34,7 +34,41 @@ def _findings_assigned_to_is_user_reference(conn: Connection) -> None:
     logger.info("Migration: findings.assigned_to now references users.id")
 
 
-STEPS = [_findings_assigned_to_is_user_reference]
+def _add_missing_columns(conn: Connection) -> None:
+    """Phase 6 columns on tables that already existed. All are nullable, so existing rows stay valid."""
+    added = []
+    for table, column, ddl in (
+        ("users", "password_hash", "VARCHAR(255)"),
+        ("users", "last_login_at", "DATETIME"),
+        ("audit_logs", "project_id", "INTEGER"),
+        ("audit_logs", "finding_id", "INTEGER"),
+    ):
+        columns = _columns(conn, table)
+        if columns and column not in columns:
+            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            added.append(f"{table}.{column}")
+    if "audit_logs.project_id" in added:
+        _backfill_audit_references(conn)
+    if added:
+        logger.info("Migration: added columns %s", ", ".join(added))
+
+
+def _backfill_audit_references(conn: Connection) -> None:
+    """Fill the new audit columns only from facts already stored: the entry's own entity reference,
+    or the project the referenced scan/finding belongs to. Nothing is guessed."""
+    conn.execute(text("UPDATE audit_logs SET project_id = entity_id WHERE entity_type = 'project' AND entity_id IS NOT NULL"))
+    conn.execute(text("UPDATE audit_logs SET finding_id = entity_id WHERE entity_type = 'finding' AND entity_id IS NOT NULL"))
+    conn.execute(text(
+        "UPDATE audit_logs SET project_id = (SELECT project_id FROM findings WHERE findings.id = audit_logs.entity_id) "
+        "WHERE entity_type = 'finding' AND entity_id IS NOT NULL"
+    ))
+    conn.execute(text(
+        "UPDATE audit_logs SET project_id = (SELECT project_id FROM scans WHERE scans.id = audit_logs.entity_id) "
+        "WHERE entity_type = 'scan' AND entity_id IS NOT NULL"
+    ))
+
+
+STEPS = [_findings_assigned_to_is_user_reference, _add_missing_columns]
 
 
 def upgrade(engine: Engine) -> None:

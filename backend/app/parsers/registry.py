@@ -6,9 +6,13 @@ from defusedxml import DefusedXmlException
 from defusedxml import ElementTree as SafeET
 
 from app.parsers.base import BaseReportParser, ReportFile, ReportParseError, UnsupportedReportError
+from app.parsers.generic_json import GenericJsonParser
 from app.parsers.nuclei import NucleiJsonlParser, NucleiJsonParser, NucleiTxtParser
+from app.parsers.pdf import PdfTableParser, ZapPdfParser
+from app.parsers.spreadsheet import CsvParser, XlsxParser
 from app.parsers.zap import ZapHtmlParser, ZapJsonParser, ZapXmlParser
 
+# Order matters: scanner-specific formats first, generic (column-mapped) formats last.
 PARSERS: list[BaseReportParser] = [
     ZapJsonParser(),
     ZapXmlParser(),
@@ -16,9 +20,19 @@ PARSERS: list[BaseReportParser] = [
     NucleiJsonParser(),
     NucleiJsonlParser(),
     NucleiTxtParser(),
+    GenericJsonParser(),
+    CsvParser(),
+    XlsxParser(),
+    ZapPdfParser(),
+    PdfTableParser(),
 ]
 
-SUPPORTED_DESCRIPTION = "OWASP ZAP (HTML, JSON, XML) or Nuclei (JSON, JSONL, TXT)"
+# Binary formats, and CSV (which may legitimately be Windows-1252), are decoded by their own parsers.
+_SELF_DECODING = (".pdf", ".xlsx", ".csv")
+
+SUPPORTED_DESCRIPTION = (
+    "OWASP ZAP (HTML, JSON, XML, PDF), Nuclei (JSON, JSONL, TXT) or a findings table (JSON, CSV, XLSX, PDF)"
+)
 
 
 def _explain_unreadable(file: ReportFile) -> None:
@@ -42,7 +56,8 @@ def _explain_unreadable(file: ReportFile) -> None:
 
 
 def detect_parser(file: ReportFile) -> BaseReportParser:
-    _ = file.text  # raises ReportParseError for non-UTF-8 content
+    if file.extension not in _SELF_DECODING:
+        _ = file.text  # raises ReportParseError for non-UTF-8 content
     for parser in PARSERS:
         if parser.accepts_extension(file) and parser.can_parse(file):
             return parser

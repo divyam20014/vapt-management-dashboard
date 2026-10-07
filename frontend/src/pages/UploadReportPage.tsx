@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from 'react';
+import { MAX_PROJECT_OPTIONS, listProjectOptions } from '../services/projectOptions';
+import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { CircleAlert, FolderKanban, LoaderCircle, Plus } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
@@ -10,8 +11,8 @@ import EmptyState from '../components/states/EmptyState';
 import LoadingState from '../components/states/LoadingState';
 import ErrorState from '../components/states/ErrorState';
 import FileDropzone from '../components/upload/FileDropzone';
+import BulkUploadProgress, { type BulkItem } from '../components/upload/BulkUploadProgress';
 import UploadSummary from '../components/upload/UploadSummary';
-import { projectService } from '../services/projectService';
 import { scanService } from '../services/scanService';
 import { settingsService } from '../services/settingsService';
 import { toApiError } from '../services/api';
@@ -23,9 +24,11 @@ import { NEW_PROJECT_PATH, projectPath } from '../utils/routes';
 import type { ApiError } from '../types/api';
 import type { Scan, UploadResult } from '../types/scan';
 
-type Phase = 'idle' | 'uploading' | 'processing' | 'done' | 'failed';
+type Phase = 'idle' | 'uploading' | 'processing' | 'done' | 'failed' | 'bulk';
 
-const PROJECT_LIMIT = 100;
+const MAX_FILES = 25;
+
+const PROJECT_LIMIT = MAX_PROJECT_OPTIONS;
 
 function existingScanFrom(error: ApiError): Scan | null {
   const details = error.details as { existing_scan?: Scan } | null;
@@ -35,13 +38,15 @@ function existingScanFrom(error: ApiError): Scan | null {
 export default function UploadReportPage() {
   useDocumentTitle('Upload Report');
   const [searchParams] = useSearchParams();
-  const projects = useApiQuery(() => projectService.list({ page_size: PROJECT_LIMIT, sort_by: 'name', sort_order: 'asc' }), []);
+  const projects = useApiQuery(() => listProjectOptions(), []);
   const settings = useApiQuery(() => settingsService.get(), []);
 
   const [projectId, setProjectId] = useState(searchParams.get('project') ?? '');
   const [scanName, setScanName] = useState('');
   const [scanDate, setScanDate] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const file = files[0] ?? null;
+  const isBulk = files.length > 1;
   const [fileError, setFileError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -50,8 +55,62 @@ export default function UploadReportPage() {
   const [result, setResult] = useState<UploadResult | null>(null);
   const [failure, setFailure] = useState<ApiError | null>(null);
   const [duplicateOf, setDuplicateOf] = useState<Scan | null>(null);
+  const [bulkItems, setBulkItems] = useState<BulkItem[]>([]);
+  const [bulkRunning, setBulkRunning] = useState(false);
 
-  const busy = phase === 'uploading' || phase === 'processing';
+  const busy = phase === 'uploading' || phase === 'processing' || bulkRunning;
+
+  // Leaving or reloading the page while a report is being sent or processed loses the result view.
+  useEffect(() => {
+    if (!busy) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [busy]);
+
+  const updateItem = (index: number, change: Partial<BulkItem>) =>
+    setBulkItems((items) => items.map((item, i) => (i === index ? { ...item, ...change } : item)));
+
+  /** Same endpoint and pipeline as a single upload, one file at a time, so each file reports its own result. */
+  const uploadOne = async (index: number, target: File, allowDuplicate: boolean) => {
+    updateItem(index, { outcome: 'uploading', progress: 0, message: null });
+    try {
+      const uploaded = await scanService.upload(
+        { projectId: Number(projectId), file: target, scanDate: scanDate || undefined, allowDuplicate },
+        (fraction) => updateItem(index, fraction >= 1 ? { outcome: 'processing', progress: 1 } : { progress: fraction }),
+      );
+      updateItem(index, { outcome: 'created', result: uploaded, message: null, failedScanId: null });
+    } catch (err) {
+      const apiError = toApiError(err);
+      const scanId = (apiError.details as { scan_id?: number } | null)?.scan_id ?? null;
+      if (apiError.code === 'duplicate_upload') {
+        const existing = existingScanFrom(apiError);
+        updateItem(index, { outcome: 'duplicate', message: `Already uploaded${existing ? ` as "${existing.scan_name}"` : ''}; skipped.` });
+      } else {
+        updateItem(index, { outcome: scanId ? 'failed' : 'rejected', message: apiError.message, failedScanId: scanId });
+      }
+    }
+  };
+
+  const submitBulk = async () => {
+    const items: BulkItem[] = files.map((f) => ({ file: f, outcome: 'queued', progress: 0, message: null, result: null, failedScanId: null }));
+    setBulkItems(items);
+    setPhase('bulk');
+    setBulkRunning(true);
+    for (let index = 0; index < items.length; index += 1) {
+      await uploadOne(index, items[index].file, false);
+    }
+    setBulkRunning(false);
+  };
+
+  const retryDuplicate = async (index: number) => {
+    setBulkRunning(true);
+    await uploadOne(index, bulkItems[index].file, true);
+    setBulkRunning(false);
+  };
 
   const submit = async (allowDuplicate = false) => {
     if (!projectId) {
@@ -60,6 +119,11 @@ export default function UploadReportPage() {
     }
     if (!file) {
       setFormError('Select a report file.');
+      return;
+    }
+    if (isBulk) {
+      setFormError(null);
+      void submitBulk();
       return;
     }
     setFormError(null);
@@ -90,7 +154,8 @@ export default function UploadReportPage() {
   };
 
   const reset = () => {
-    setFile(null);
+    setFiles([]);
+    setBulkItems([]);
     setScanName('');
     setScanDate('');
     setResult(null);
@@ -152,7 +217,25 @@ export default function UploadReportPage() {
     <>
       <PageHeader title="Upload Report" description="Upload a VAPT report. It is validated, parsed and stored with its original file." />
 
-      {phase === 'done' && result ? (
+      {phase === 'bulk' ? (
+        <Card
+          title={`Uploading ${bulkItems.length} reports to ${selectedProject?.name ?? 'the project'}`}
+          actions={
+            !bulkRunning && (
+              <div className="flex gap-2">
+                <Link to={projectPath(Number(projectId))} className={buttonClasses('secondary', 'sm')}>
+                  View project
+                </Link>
+                <Button size="sm" onClick={reset}>
+                  Upload more reports
+                </Button>
+              </div>
+            )
+          }
+        >
+          <BulkUploadProgress items={bulkItems} running={bulkRunning} onRetryDuplicate={(index) => void retryDuplicate(index)} />
+        </Card>
+      ) : phase === 'done' && result ? (
         <Card
           title="Analysis summary"
           actions={
@@ -203,13 +286,13 @@ export default function UploadReportPage() {
               </div>
 
               <FileDropzone
-                file={file}
+                files={files}
                 accept={settings.data.allowed_extensions}
                 maxSizeMb={settings.data.max_upload_size_mb}
+                maxFiles={MAX_FILES}
                 disabled={busy}
-                onSelect={(selected) => {
-                  setFile(selected);
-                  setFileError(null);
+                onChange={(selected) => {
+                  setFiles(selected);
                   setFailure(null);
                   if (phase === 'failed') setPhase('idle');
                 }}
@@ -224,10 +307,10 @@ export default function UploadReportPage() {
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                 <TextField
                   label="Scan name"
-                  value={scanName}
+                  value={isBulk ? '' : scanName}
                   maxLength={255}
-                  disabled={busy}
-                  placeholder={file?.name ?? 'Defaults to the file name'}
+                  disabled={busy || isBulk}
+                  placeholder={isBulk ? 'Each report is named after its file' : (file?.name ?? 'Defaults to the file name')}
                   onChange={(event) => setScanName(event.target.value)}
                 />
                 <TextField
@@ -284,7 +367,7 @@ export default function UploadReportPage() {
 
               <div className="flex justify-end">
                 <Button type="submit" loading={busy} disabled={!file || !projectId}>
-                  Upload and analyse
+                  {isBulk ? `Upload ${files.length} reports` : 'Upload and analyse'}
                 </Button>
               </div>
             </form>

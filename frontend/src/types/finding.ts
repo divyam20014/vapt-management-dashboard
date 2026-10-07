@@ -1,5 +1,6 @@
 import type { FindingStatus, Severity } from '../utils/constants';
 import type { UserRef } from './user';
+import type { StandardGuidanceRef } from './remediation';
 
 export interface FindingListItem {
   id: number;
@@ -84,6 +85,8 @@ export interface FindingDetail extends FindingListItem {
   occurrences: Occurrence[];
   status_history: StatusHistoryEntry[];
   potential_duplicates: RelatedDuplicate[];
+  /** Application guidance linked by exact rule; separate from `recommendation` (the report's own text). */
+  standard_guidance: StandardGuidanceRef[];
 }
 
 export type FindingSortField =
@@ -111,6 +114,8 @@ export interface FindingQuery {
   date_field?: 'first_detected' | 'last_detected';
   date_from?: string;
   date_to?: string;
+  /** Standard remediation guideline slug. */
+  remediation?: string;
   sort_by?: FindingSortField;
   sort_order?: 'asc' | 'desc';
 }

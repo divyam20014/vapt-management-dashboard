@@ -22,6 +22,8 @@ import ErrorState from '../components/states/ErrorState';
 import { dashboardService } from '../services/dashboardService';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useAuth } from '../hooks/useAuth';
+import { PERMISSIONS } from '../utils/constants';
 import { NEW_PROJECT_PATH, ROUTES } from '../utils/routes';
 import type { DashboardSummary } from '../types/dashboard';
 
@@ -47,6 +49,16 @@ export default function DashboardPage() {
   );
 }
 
+function NewProjectAction() {
+  if (!useAuth().can(PERMISSIONS.projectsWrite)) return null;
+  return (
+    <Link to={NEW_PROJECT_PATH} className={buttonClasses('primary')}>
+      <Plus className="size-4" aria-hidden />
+      New Project
+    </Link>
+  );
+}
+
 function DashboardContent({ summary }: { summary: DashboardSummary }) {
   if (summary.project_count === 0) {
     return (
@@ -55,12 +67,7 @@ function DashboardContent({ summary }: { summary: DashboardSummary }) {
           icon={<FolderKanban className="size-5" aria-hidden />}
           title="No projects yet"
           description="Create a project for each application you test, then upload its VAPT reports. Dashboard metrics are calculated from that data."
-          action={
-            <Link to={NEW_PROJECT_PATH} className={buttonClasses('primary')}>
-              <Plus className="size-4" aria-hidden />
-              New Project
-            </Link>
-          }
+          action={<NewProjectAction />}
         />
       </Card>
     );
@@ -69,7 +76,7 @@ function DashboardContent({ summary }: { summary: DashboardSummary }) {
   const severity = summary.findings_by_severity;
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
         <StatCard label="Projects" value={summary.project_count} icon={<FolderKanban className="size-5" aria-hidden />} />
         <StatCard
           label="Scans"

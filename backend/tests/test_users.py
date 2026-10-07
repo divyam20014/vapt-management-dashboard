@@ -9,6 +9,7 @@ from sqlalchemy.schema import CreateTable
 
 from app.database.migrations import upgrade
 from app.main import create_app
+from tests.conftest import admin_session
 
 
 def test_create_and_list_users(client, sqlite_rows):
@@ -18,8 +19,12 @@ def test_create_and_list_users(client, sqlite_rows):
     assert alice.json()["email"] == "alice@example.com"
     assert alice.json()["active"] is True
     client.post("/api/users", json={"name": "bob", "email": "bob@example.com", "role": "Viewer"})
-    assert [user["name"] for user in client.get("/api/users").json()] == ["Alice", "bob"]
-    assert sqlite_rows("SELECT action, entity_id FROM audit_logs") == [("user.created", 1), ("user.created", 2)]
+    assert [user["name"] for user in client.get("/api/users").json()] == ["Alice", "bob", "Test Admin"]
+    assert sqlite_rows("SELECT action, entity_id, user_id FROM audit_logs WHERE action = 'user.created'") == [
+        ("user.created", 2, client.admin["id"]), ("user.created", 3, client.admin["id"])
+    ]
+    # Created without a password: can be assigned findings, cannot sign in yet.
+    assert alice.json()["can_sign_in"] is False
 
 
 def test_duplicate_email_is_rejected(client):
@@ -35,8 +40,8 @@ def test_invalid_users_are_rejected(client, body):
 
 def test_update_and_deactivate_user(client, sqlite_rows):
     user = client.post("/api/users", json={"name": "A", "email": "a@example.com"}).json()
-    actor = client.post("/api/users", json={"name": "Admin", "email": "admin@example.com", "role": "Admin"}).json()
-    response = client.put(f"/api/users/{user['id']}", json={"role": "Admin", "active": False}, headers={"X-Acting-User": str(actor["id"])})
+    actor = client.admin
+    response = client.put(f"/api/users/{user['id']}", json={"role": "Admin", "active": False})
     assert response.status_code == 200
     assert (response.json()["role"], response.json()["active"]) == ("Admin", False)
     assert [u["id"] for u in client.get("/api/users", params={"include_inactive": False}).json()] == [actor["id"]]
@@ -80,7 +85,7 @@ def make_phase2_database(settings, free_text_assignee: str | None = None) -> Non
 
 def test_phase2_database_is_upgraded_on_startup(settings):
     make_phase2_database(settings)
-    with TestClient(create_app(settings)) as client:
+    with admin_session(create_app(settings)) as client:
         assert client.get("/api/findings").status_code == 200
     with sqlite3.connect(settings.sqlite_path) as conn:
         column = [row for row in conn.execute("PRAGMA table_info(findings)") if row[1] == "assigned_to"][0]

@@ -21,6 +21,7 @@ const KEYS = {
   order: 'order',
   page: 'page',
   size: 'size',
+  remediation: 'guidance',
 } as const;
 
 export interface FindingFilterState {
@@ -34,6 +35,8 @@ export interface FindingFilterState {
   dateField: 'first_detected' | 'last_detected';
   from: string;
   to: string;
+  /** Standard remediation guideline slug. */
+  remediation: string;
 }
 
 type FilterKey = keyof FindingFilterState;
@@ -50,6 +53,7 @@ const SCALAR_FILTERS: Partial<Record<FilterKey, string>> = {
   dateField: KEYS.dateField,
   from: KEYS.from,
   to: KEYS.to,
+  remediation: KEYS.remediation,
 };
 
 export function useFindingQuery(lockedSeverities?: readonly string[], scanId?: number) {
@@ -68,6 +72,7 @@ export function useFindingQuery(lockedSeverities?: readonly string[], scanId?: n
       dateField: params.get(KEYS.dateField) === 'first_detected' ? 'first_detected' : 'last_detected',
       from: params.get(KEYS.from) ?? '',
       to: params.get(KEYS.to) ?? '',
+      remediation: params.get(KEYS.remediation) ?? '',
     };
   }, [params, lockedSeverities]);
 
@@ -93,6 +98,7 @@ export function useFindingQuery(lockedSeverities?: readonly string[], scanId?: n
       date_field: filters.from || filters.to ? filters.dateField : undefined,
       date_from: filters.from || undefined,
       date_to: filters.to || undefined,
+      remediation: filters.remediation || undefined,
       sort_by: sortBy,
       sort_order: sortOrder,
     }),
@@ -159,7 +165,8 @@ export function useFindingQuery(lockedSeverities?: readonly string[], scanId?: n
     filters.sources.length +
     filters.categories.length +
     Number(Boolean(filters.assignee)) +
-    Number(Boolean(filters.from || filters.to));
+    Number(Boolean(filters.from || filters.to)) +
+    Number(Boolean(filters.remediation));
 
   return { filters, query, sortBy, sortOrder, page, pageSize, setFilter, clearFilters, setSort, setPage, setPageSize, activeFilterCount };
 }

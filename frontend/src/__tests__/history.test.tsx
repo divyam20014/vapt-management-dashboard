@@ -138,7 +138,8 @@ describe('Comparison view', () => {
     vi.mocked(scanService.list).mockResolvedValue(pageOf([week3, week2, week1]));
     vi.mocked(scanService.compare).mockResolvedValue(COMPARISON);
     renderApp('/scans/compare');
-    await user.selectOptions(await screen.findByLabelText('Project'), 'Customer Portal');
+    await screen.findByRole('option', { name: 'Customer Portal' });
+    await user.selectOptions(screen.getByLabelText('Project'), 'Customer Portal');
     await waitFor(() => expect(screen.getByLabelText('Current')).toHaveValue('3'));
     expect(screen.getByLabelText('Baseline (previous)')).toHaveValue('2');
     expect(scanService.list).toHaveBeenLastCalledWith(expect.objectContaining({ project_id: [1], status: ['Completed'] }));
@@ -197,8 +198,9 @@ describe('Project dashboard', () => {
 
     expect((await screen.findAllByRole('link', { name: 'week3.json' })).length).toBe(2); // latest scan + history
     expect(dashboardService.getSummary).toHaveBeenCalledWith(1);
-    expect(dashboardService.getTrends).toHaveBeenCalledWith(1);
-    expect(screen.getByTestId('severity-Low')).toHaveTextContent('5');
+    // Severity cards and trends render once the summary has loaded (the scan list loads independently).
+    expect(await screen.findByTestId('severity-Low')).toHaveTextContent('5');
+    await waitFor(() => expect(dashboardService.getTrends).toHaveBeenCalledWith(1));
     expect(screen.getByRole('link', { name: /Compare latest two/ })).toHaveAttribute('href', '/scans/compare?base=2&compare=3');
     expect(screen.getByRole('link', { name: 'Download week1.json' })).toHaveAttribute('href', '/api/scans/1/original');
   });

@@ -16,9 +16,11 @@ interface FindingsTableProps {
   onSort: (field: FindingSortField) => void;
   showProject: boolean;
   busy?: boolean;
+  /** Selection checkboxes (bulk actions); off for roles that cannot change findings. */
+  selectable?: boolean;
 }
 
-export default function FindingsTable({ items, selected, onToggle, onTogglePage, sortBy, sortOrder, onSort, showProject, busy }: FindingsTableProps) {
+export default function FindingsTable({ items, selected, onToggle, onTogglePage, sortBy, sortOrder, onSort, showProject, busy, selectable = true }: FindingsTableProps) {
   const location = useLocation();
   const pageIds = items.map((item) => item.id);
   const selectedOnPage = pageIds.filter((id) => selected.has(id)).length;
@@ -46,16 +48,18 @@ export default function FindingsTable({ items, selected, onToggle, onTogglePage,
       <table className="min-w-full text-sm">
         <thead className="bg-slate-50 text-xs font-medium tracking-wide text-slate-500">
           <tr>
-            <th scope="col" className="w-10 px-3 py-3">
-              <input
-                ref={headerRef}
-                type="checkbox"
-                aria-label="Select all findings on this page"
-                className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
-                checked={pageIds.length > 0 && selectedOnPage === pageIds.length}
-                onChange={(event) => onTogglePage(pageIds, event.target.checked)}
-              />
-            </th>
+            {selectable && (
+              <th scope="col" className="w-10 px-3 py-3">
+                <input
+                  ref={headerRef}
+                  type="checkbox"
+                  aria-label="Select all findings on this page"
+                  className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                  checked={pageIds.length > 0 && selectedOnPage === pageIds.length}
+                  onChange={(event) => onTogglePage(pageIds, event.target.checked)}
+                />
+              </th>
+            )}
             {sortable('severity', 'Severity')}
             {sortable('title', 'Finding', 'min-w-64')}
             <th scope="col" className="px-3 py-3 text-left uppercase">Category</th>
@@ -70,15 +74,17 @@ export default function FindingsTable({ items, selected, onToggle, onTogglePage,
         <tbody className="divide-y divide-slate-100">
           {items.map((item) => (
             <tr key={item.id} className={selected.has(item.id) ? 'bg-teal-50/50' : 'hover:bg-slate-50'}>
-              <td className="px-3 py-3 align-top">
-                <input
-                  type="checkbox"
-                  aria-label={`Select ${item.normalized_title}`}
-                  className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
-                  checked={selected.has(item.id)}
-                  onChange={() => onToggle(item.id)}
-                />
-              </td>
+              {selectable && (
+                <td className="px-3 py-3 align-top">
+                  <input
+                    type="checkbox"
+                    aria-label={`Select ${item.normalized_title}`}
+                    className="size-4 rounded border-slate-300 text-teal-700 focus:ring-teal-600"
+                    checked={selected.has(item.id)}
+                    onChange={() => onToggle(item.id)}
+                  />
+                </td>
+              )}
               <td className="px-3 py-3 align-top">
                 <SeverityBadge severity={item.normalized_severity} original={item.original_severity} />
               </td>
@@ -94,6 +100,10 @@ export default function FindingsTable({ items, selected, onToggle, onTogglePage,
                   {[showProject ? item.project_name : null, item.cwe, item.occurrence_count > 1 ? `${item.occurrence_count} observations` : null]
                     .filter(Boolean)
                     .join(' · ')}
+                </p>
+                {/* Small screens: the endpoint column is scrolled out of view, so show where the finding is here. */}
+                <p className="mt-0.5 font-mono text-xs break-all text-slate-500 md:hidden" aria-hidden>
+                  {item.endpoint}
                 </p>
               </td>
               <td className="px-3 py-3 align-top text-slate-600">{item.category ?? '—'}</td>

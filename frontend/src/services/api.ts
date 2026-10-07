@@ -1,27 +1,23 @@
 import axios, { AxiosError } from 'axios';
 import { ApiError, type FieldError } from '../types/api';
 
+/**
+ * The session is an HttpOnly cookie set by the server, so scripts never see it. The server requires
+ * `X-Requested-With` on every request that changes data (CSRF defence); axios sends it on all requests.
+ */
 export const api = axios.create({
   baseURL: '/api',
   timeout: 30_000,
-  headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
+  headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
 });
 
-/**
- * The user the UI is acting as, sent with every request until authentication exists (Phase 6).
- * It identifies who made a change; it is not authentication.
- */
-export const ACTING_USER_HEADER = 'X-Acting-User';
-let actingUserId: number | null = null;
+/** Called when the server says the session is missing or has ended (set by AuthProvider). */
+let unauthorizedHandler: (() => void) | null = null;
 
-export function setActingUserId(id: number | null) {
-  actingUserId = id;
+export function onUnauthorized(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
 }
-
-api.interceptors.request.use((config) => {
-  if (actingUserId !== null) config.headers.set(ACTING_USER_HEADER, String(actingUserId));
-  return config;
-});
 
 interface ErrorEnvelope {
   error?: { code?: string; message?: string; details?: unknown };
@@ -54,5 +50,9 @@ export function toApiError(error: unknown): ApiError {
 
 api.interceptors.response.use(
   (response) => response,
-  (error) => Promise.reject(toApiError(error)),
+  (error) => {
+    const apiError = toApiError(error);
+    if (apiError.status === 401 && apiError.code === 'not_authenticated') unauthorizedHandler?.();
+    return Promise.reject(apiError);
+  },
 );

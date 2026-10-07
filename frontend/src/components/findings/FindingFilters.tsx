@@ -1,4 +1,4 @@
-import { Search, X } from 'lucide-react';
+import { Search, SlidersHorizontal, X } from 'lucide-react';
 import MultiSelect from '../ui/MultiSelect';
 import { useEffect, useState } from 'react';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
@@ -36,6 +36,8 @@ export default function FindingFilters({
   severityOptions = SEVERITY_FILTER_OPTIONS,
 }: FindingFiltersProps) {
   const [search, setSearch] = useState(filters.search);
+  // On phones the filter controls fold away behind a toggle so results stay near the top.
+  const [expanded, setExpanded] = useState(false);
   const debounced = useDebouncedValue(search, 350);
 
   useEffect(() => {
@@ -61,6 +63,17 @@ export default function FindingFilters({
             className={`${CONTROL} pl-9`}
           />
         </div>
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-controls="finding-filter-controls"
+          onClick={() => setExpanded((value) => !value)}
+          className="inline-flex items-center gap-1.5 self-start rounded-md px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-300 ring-inset hover:bg-slate-50 sm:hidden"
+        >
+          <SlidersHorizontal className="size-4" aria-hidden />
+          {expanded ? 'Hide filters' : 'Filters'}
+          {activeFilterCount > 0 && ` (${activeFilterCount})`}
+        </button>
         {activeFilterCount > 0 && (
           <button
             type="button"
@@ -76,7 +89,7 @@ export default function FindingFilters({
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <div id="finding-filter-controls" className={`${expanded ? 'grid' : 'hidden'} grid-cols-1 gap-3 sm:grid sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7`}>
         <MultiSelect
           label="Severity"
           options={toOptions(severityOptions)}
@@ -125,7 +138,7 @@ export default function FindingFilters({
           <option value="first_detected">First detected</option>
         </select>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-600">
+      <div className={`${expanded ? 'flex' : 'hidden'} flex-wrap items-center gap-2 text-sm text-slate-600 sm:flex`}>
         <span>Detected between</span>
         <input type="date" aria-label="From date" value={filters.from} max={filters.to || undefined} onChange={(event) => setFilter('from', event.target.value)} className={CONTROL_BASE} />
         <span>and</span>

@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from tests.conftest import CSRF_HEADERS, TEST_PASSWORD
 from tests.fixtures import NUCLEI_JSONL, NUCLEI_RESULTS, ZAP_DISTINCT_FINDINGS, ZAP_JSON
 
 TOTAL = ZAP_DISTINCT_FINDINGS + NUCLEI_RESULTS
@@ -22,18 +23,17 @@ def upload(client, project_id, path=None, *, name=None, content=None, headers=No
 
 
 @pytest.fixture
-def users(client):
-    def create(name, email, role="Security Analyst"):
-        response = client.post("/api/users", json={"name": name, "email": email, "role": role})
-        assert response.status_code == 201, response.text
-        return response.json()
-
-    return {"alice": create("Alice Analyst", "alice@example.com"), "bob": create("Bob Admin", "bob@example.com", "Admin")}
+def users(client, login_as):
+    """Alice is a signed-in Security Analyst; Bob is an Admin without a password (assignee only)."""
+    alice = login_as("Security Analyst", name="Alice Analyst", email="alice@example.com")
+    bob = client.post("/api/users", json={"name": "Bob Admin", "email": "bob@example.com", "role": "Admin"})
+    assert bob.status_code == 201, bob.text
+    return {"alice": {**alice.user, "client": alice}, "bob": bob.json()}
 
 
 @pytest.fixture
-def as_alice(users):
-    return {"X-Acting-User": str(users["alice"]["id"])}
+def alice(users):
+    return users["alice"]["client"]
 
 
 @pytest.fixture
@@ -118,11 +118,11 @@ def test_date_filters(client, workspace):
     assert find(client, project_id=workspace["a"], date_field="first_detected", date_from="2026-10-08")["total"] == 0
 
 
-def test_combined_filters(client, workspace, as_alice, users):
+def test_combined_filters(client, workspace, alice, users):
     low_zap = find(client, project_id=workspace["a"], severity="Low", status="Open", source_tool="OWASP ZAP", page_size=100)
     assert low_zap["total"] == 17
     ids = [item["id"] for item in low_zap["items"][:5]]
-    client.post("/api/findings/bulk-update", json={"finding_ids": ids, "status": "In Progress", "assigned_to": users["bob"]["id"]}, headers=as_alice)
+    alice.post("/api/findings/bulk-update", json={"finding_ids": ids, "status": "In Progress", "assigned_to": users["bob"]["id"]})
 
     assert find(client, project_id=workspace["a"], severity="Low", status="Open", source_tool="OWASP ZAP")["total"] == 12
     in_progress = find(client, project_id=workspace["a"], severity="Low", status="In Progress", assignee=str(users["bob"]["id"]), page_size=100)
@@ -193,7 +193,7 @@ def test_finding_detail_exposes_report_values(client, workspace):
 
     history = detail["status_history"]
     assert len(history) == 1
-    assert history[0]["old_status"] is None and history[0]["new_status"] == "Open" and history[0]["changed_by"] is None
+    assert history[0]["old_status"] is None and history[0]["new_status"] == "Open" and history[0]["changed_by"] == {"id": client.admin["id"], "name": "Test Admin"}  # the uploader
     assert "Detected in scan" in history[0]["comment"]
 
 
@@ -221,22 +221,22 @@ def test_missing_finding_is_404(client):
 
 # --- single updates -----------------------------------------------------------------------
 
-def test_status_change_requires_an_acting_user(client, workspace, users):
+def test_status_change_requires_a_signed_in_user_with_permission(client, anon_client, login_as, workspace):
     fid = finding_id(client, workspace["a"], "swagger")
-    response = client.put(f"/api/findings/{fid}", json={"status": "In Progress"})
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "acting_user_required"
-    assert client.put(f"/api/findings/{fid}", json={"status": "In Progress"}, headers={"X-Acting-User": "abc"}).status_code == 400
-    assert client.put(f"/api/findings/{fid}", json={"status": "In Progress"}, headers={"X-Acting-User": "999"}).status_code == 400
-    client.put(f"/api/users/{users['bob']['id']}", json={"active": False})
-    assert client.put(f"/api/findings/{fid}", json={"status": "In Progress"}, headers={"X-Acting-User": str(users["bob"]["id"])}).status_code == 400
+    response = anon_client.put(f"/api/findings/{fid}", json={"status": "In Progress"})
+    assert (response.status_code, response.json()["error"]["code"]) == (401, "not_authenticated")
+    viewer = login_as("Viewer")
+    response = viewer.put(f"/api/findings/{fid}", json={"status": "In Progress"})
+    assert (response.status_code, response.json()["error"]["code"]) == (403, "forbidden")
+    # The old self-declared header grants nothing.
+    assert anon_client.put(f"/api/findings/{fid}", json={"status": "In Progress"}, headers={"X-Acting-User": "1"}).status_code == 401
     assert client.get(f"/api/findings/{fid}").json()["status"] == "Open"
 
 
-def test_status_lifecycle_is_recorded_in_history_and_audit(client, workspace, as_alice, users, sqlite_rows):
+def test_status_lifecycle_is_recorded_in_history_and_audit(client, workspace, alice, users, sqlite_rows):
     fid = finding_id(client, workspace["a"], "swagger")
     for status, comment in [("In Progress", "Investigating"), ("Resolved", "Docs endpoint removed"), ("Reopened", "Still reachable in retest")]:
-        response = client.put(f"/api/findings/{fid}", json={"status": status, "comment": comment}, headers=as_alice)
+        response = alice.put(f"/api/findings/{fid}", json={"status": status, "comment": comment})
         assert response.status_code == 200, response.text
         assert response.json()["status"] == status
 
@@ -257,45 +257,47 @@ def test_status_lifecycle_is_recorded_in_history_and_audit(client, workspace, as
     assert json.loads(audit[-1][1]) == {"from": "Resolved", "to": "Reopened", "comment": "Still reachable in retest"}
 
 
-def test_setting_the_same_status_records_nothing(client, workspace, as_alice, sqlite_rows):
+def test_setting_the_same_status_records_nothing(client, workspace, alice, sqlite_rows):
     fid = finding_id(client, workspace["a"], "swagger")
-    assert client.put(f"/api/findings/{fid}", json={"status": "Open"}, headers=as_alice).status_code == 200
+    assert alice.put(f"/api/findings/{fid}", json={"status": "Open"}).status_code == 200
     assert sqlite_rows("SELECT COUNT(*) FROM finding_status_history WHERE finding_id = ?", (fid,)) == [(1,)]
     assert sqlite_rows("SELECT COUNT(*) FROM audit_logs WHERE action LIKE 'finding.%'") == [(0,)]
 
 
-def test_assignment(client, workspace, as_alice, users, sqlite_rows):
+def test_assignment(client, workspace, alice, users, sqlite_rows):
     fid = finding_id(client, workspace["a"], "swagger")
-    assigned = client.put(f"/api/findings/{fid}", json={"assigned_to": users["bob"]["id"]}, headers=as_alice).json()
+    assigned = alice.put(f"/api/findings/{fid}", json={"assigned_to": users["bob"]["id"]}).json()
     assert assigned["assignee"] == {"id": users["bob"]["id"], "name": "Bob Admin"}
     assert assigned["status"] == "Open"
     assert find(client, assignee=str(users["bob"]["id"]))["total"] == 1
 
-    unassigned = client.put(f"/api/findings/{fid}", json={"assigned_to": None}, headers=as_alice).json()
+    unassigned = alice.put(f"/api/findings/{fid}", json={"assigned_to": None}).json()
     assert unassigned["assignee"] is None
     rows = sqlite_rows("SELECT details FROM audit_logs WHERE action = 'finding.assigned' ORDER BY id")
     assert [json.loads(r[0]) for r in rows] == [{"from": None, "to": users["bob"]["id"]}, {"from": users["bob"]["id"], "to": None}]
 
-    assert client.put(f"/api/findings/{fid}", json={"assigned_to": 999}, headers=as_alice).status_code == 404
+    assert alice.put(f"/api/findings/{fid}", json={"assigned_to": 999}).status_code == 404
     client.put(f"/api/users/{users['bob']['id']}", json={"active": False})
-    assert client.put(f"/api/findings/{fid}", json={"assigned_to": users["bob"]["id"]}, headers=as_alice).status_code == 400
+    assert alice.put(f"/api/findings/{fid}", json={"assigned_to": users["bob"]["id"]}).status_code == 400
 
 
 @pytest.mark.parametrize(
     "body",
     [{}, {"comment": "only a comment"}, {"status": None}, {"status": "Done"}, {"status": "Closed", "normalized_title": "edited"}, {"status": "Closed", "evidence": "x"}],
 )
-def test_invalid_updates_are_rejected(client, workspace, as_alice, body):
+def test_invalid_updates_are_rejected(client, workspace, alice, body):
     fid = finding_id(client, workspace["a"], "swagger")
-    response = client.put(f"/api/findings/{fid}", json=body, headers=as_alice)
+    response = alice.put(f"/api/findings/{fid}", json=body)
     assert response.status_code == 422
     assert client.get(f"/api/findings/{fid}").json()["status"] == "Open"
 
 
-def test_changes_persist_across_application_restart(settings, workspace, client, as_alice):
+def test_changes_persist_across_application_restart(settings, workspace, client, alice):
     fid = finding_id(client, workspace["a"], "swagger")
-    client.put(f"/api/findings/{fid}", json={"status": "Accepted Risk", "comment": "Internal only"}, headers=as_alice)
+    alice.put(f"/api/findings/{fid}", json={"status": "Accepted Risk", "comment": "Internal only"})
     with TestClient(create_app(settings)) as fresh:
+        fresh.headers.update(CSRF_HEADERS)
+        assert fresh.post("/api/auth/login", json={"email": "alice@example.com", "password": TEST_PASSWORD}).status_code == 200
         detail = fresh.get(f"/api/findings/{fid}").json()
     assert detail["status"] == "Accepted Risk"
     assert detail["status_history"][0]["comment"] == "Internal only"
@@ -303,12 +305,11 @@ def test_changes_persist_across_application_restart(settings, workspace, client,
 
 # --- bulk updates -------------------------------------------------------------------------
 
-def test_bulk_status_update(client, workspace, as_alice, users, sqlite_rows):
+def test_bulk_status_update(client, workspace, alice, users, sqlite_rows):
     ids = [item["id"] for item in find(client, project_id=workspace["a"], source_tool="Nuclei")["items"]]
-    response = client.post(
+    response = alice.post(
         "/api/findings/bulk-update",
         json={"finding_ids": ids + ids[:2], "status": "False Positive", "comment": "Juice Shop is a demo app"},
-        headers=as_alice,
     )
     assert response.status_code == 200, response.text
     result = response.json()
@@ -321,34 +322,34 @@ def test_bulk_status_update(client, workspace, as_alice, users, sqlite_rows):
     assert len(audit) == 1
     assert sorted(json.loads(audit[0][1])["finding_ids"]) == sorted(ids)
 
-    again = client.post("/api/findings/bulk-update", json={"finding_ids": ids, "status": "False Positive"}, headers=as_alice).json()
+    again = alice.post("/api/findings/bulk-update", json={"finding_ids": ids, "status": "False Positive"}).json()
     assert (again["updated"], again["unchanged"]) == (0, NUCLEI_RESULTS)
     assert sqlite_rows("SELECT COUNT(*) FROM audit_logs WHERE action = 'findings.bulk_updated'") == [(1,)]
 
 
-def test_bulk_assignment(client, workspace, as_alice, users):
+def test_bulk_assignment(client, workspace, alice, users):
     ids = [item["id"] for item in find(client, project_id=workspace["a"], severity="Medium")["items"]]
-    result = client.post("/api/findings/bulk-update", json={"finding_ids": ids, "assigned_to": users["bob"]["id"]}, headers=as_alice).json()
+    result = alice.post("/api/findings/bulk-update", json={"finding_ids": ids, "assigned_to": users["bob"]["id"]}).json()
     assert result["updated"] == 9
     assert find(client, assignee=str(users["bob"]["id"]))["total"] == 9
     assert find(client, project_id=workspace["a"], severity="Medium", status="Open")["total"] == 9
 
 
-def test_bulk_update_with_unknown_id_changes_nothing(client, workspace, as_alice, sqlite_rows):
+def test_bulk_update_with_unknown_id_changes_nothing(client, workspace, alice, sqlite_rows):
     ids = [item["id"] for item in find(client, project_id=workspace["a"], page_size=5)["items"]]
-    response = client.post("/api/findings/bulk-update", json={"finding_ids": ids + [99999], "status": "Closed"}, headers=as_alice)
+    response = alice.post("/api/findings/bulk-update", json={"finding_ids": ids + [99999], "status": "Closed"})
     assert response.status_code == 404
     assert response.json()["error"]["details"] == {"missing_ids": [99999]}
     assert sqlite_rows("SELECT COUNT(*) FROM findings WHERE status = 'Closed'") == [(0,)]
 
 
-def test_bulk_update_is_rolled_back_on_failure(client, workspace, as_alice, sqlite_rows, monkeypatch):
+def test_bulk_update_is_rolled_back_on_failure(client, workspace, alice, sqlite_rows, monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("simulated failure")
 
     monkeypatch.setattr("app.services.finding_service.audit_service.record", fail)
     ids = [item["id"] for item in find(client, project_id=workspace["a"], page_size=5)["items"]]
-    response = client.post("/api/findings/bulk-update", json={"finding_ids": ids, "status": "Closed"}, headers=as_alice)
+    response = alice.post("/api/findings/bulk-update", json={"finding_ids": ids, "status": "Closed"})
     assert response.status_code == 500
     assert sqlite_rows("SELECT COUNT(*) FROM findings WHERE status = 'Closed'") == [(0,)]
     assert sqlite_rows("SELECT COUNT(*) FROM finding_status_history WHERE new_status = 'Closed'") == [(0,)]
@@ -363,21 +364,22 @@ def test_bulk_update_is_rolled_back_on_failure(client, workspace, as_alice, sqli
         ({"finding_ids": [1], "status": "Closed", "title": "x"}, 422),
     ],
 )
-def test_bulk_update_validation(client, workspace, as_alice, body, status):
-    assert client.post("/api/findings/bulk-update", json=body, headers=as_alice).status_code == status
+def test_bulk_update_validation(client, workspace, alice, body, status):
+    assert alice.post("/api/findings/bulk-update", json=body).status_code == status
 
 
-def test_bulk_update_requires_acting_user(client, workspace):
-    response = client.post("/api/findings/bulk-update", json={"finding_ids": [1], "status": "Closed"})
-    assert response.status_code == 400
-    assert response.json()["error"]["code"] == "acting_user_required"
+def test_bulk_update_requires_permission(anon_client, login_as, workspace, sqlite_rows):
+    body = {"finding_ids": [1], "status": "Closed"}
+    assert anon_client.post("/api/findings/bulk-update", json=body).status_code == 401
+    assert login_as("Viewer").post("/api/findings/bulk-update", json=body).status_code == 403
+    assert sqlite_rows("SELECT COUNT(*) FROM findings WHERE status = 'Closed'") == [(0,)]
 
 
 # --- audit of other actions ---------------------------------------------------------------
 
-def test_project_and_upload_actions_are_audited_with_the_acting_user(client, users, as_alice, sqlite_rows):
-    project = client.post("/api/projects", json={"name": "Audited"}, headers=as_alice).json()
-    upload(client, project["id"], ZAP_JSON, headers=as_alice)
+def test_project_and_upload_actions_are_audited_with_the_signed_in_user(client, users, alice, sqlite_rows):
+    project = alice.post("/api/projects", json={"name": "Audited"}).json()
+    upload(alice, project["id"], ZAP_JSON)
     rows = sqlite_rows("SELECT action, user_id, entity_type FROM audit_logs WHERE action IN ('project.created', 'report.uploaded') ORDER BY id")
     assert rows == [("project.created", users["alice"]["id"], "project"), ("report.uploaded", users["alice"]["id"], "scan")]
     first = find(client, project_id=project["id"], page_size=1)["items"][0]["id"]

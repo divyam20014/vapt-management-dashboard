@@ -232,17 +232,21 @@ def _check_complete(soup: BeautifulSoup, alerts: list[dict[str, Any]]) -> None:
     Without this, a truncated report (or a different ZAP HTML template) would parse as a clean scan,
     and every finding of the previous scan would wrongly appear resolved.
     """
-    declared = _summary_counts(soup)
+    verify_alert_counts(_summary_counts(soup), alerts, "HTML")
+
+
+def verify_alert_counts(declared: dict[str, int] | None, alerts: list[dict[str, Any]], kind: str) -> None:
+    """Compare the per-risk alert counts a ZAP report declares with the alerts actually parsed."""
     if declared is None:
         raise ReportParseError(
-            'The ZAP HTML report has no "Summary of Alerts" table, so its completeness cannot be verified. '
+            f'The ZAP {kind} report has no "Summary of Alerts" table, so its completeness cannot be verified. '
             "Upload the traditional ZAP HTML report, or the JSON/XML report."
         )
     found = {level: sum(1 for alert in alerts if alert["risk"] == level) for level in _SUMMARY_RISK_LEVELS}
     missing = {level: (declared[level], found[level]) for level in declared if declared[level] != found[level]}
     if missing:
         detail = ", ".join(f"{level}: {expected} declared, {actual} found" for level, (expected, actual) in missing.items())
-        raise ReportParseError(f"The ZAP HTML report appears incomplete ({detail}). No findings were imported.")
+        raise ReportParseError(f"The ZAP {kind} report appears incomplete ({detail}). No findings were imported.")
 
 
 class ZapHtmlParser(BaseReportParser):

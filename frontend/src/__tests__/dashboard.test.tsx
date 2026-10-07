@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderApp } from '../test/render';
 import { dashboardService } from '../services/dashboardService';
@@ -37,10 +37,10 @@ describe('DashboardPage', () => {
     vi.mocked(dashboardService.getTrends).mockResolvedValue({ granularity: 'day', points: [] });
   });
 
-  it('shows a loading state while the summary loads', () => {
+  it('shows a loading state while the summary loads', async () => {
     vi.mocked(dashboardService.getSummary).mockReturnValue(new Promise(() => {}));
     renderApp('/');
-    expect(screen.getByRole('status')).toHaveTextContent('Loading dashboard');
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Loading dashboard'));
   });
 
   it('shows the "No projects yet" empty state when the database is empty', async () => {

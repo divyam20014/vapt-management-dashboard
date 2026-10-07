@@ -3,13 +3,17 @@ services:
     build: .
     image: vapt-management-dashboard:latest
     ports:
-      - "8000:8000"
+      # Published on this machine only. The first person to open a fresh installation creates the
+      # Admin account, so expose it to the network (e.g. "8000:8000") only after setup is done.
+      - "127.0.0.1:8000:8000"
     environment:
       DATABASE_URL: sqlite:///./data/vapt.db
       UPLOAD_DIRECTORY: ./data/uploads
       EXPORT_DIRECTORY: ./exports
       MAX_UPLOAD_SIZE_MB: "50"
       LOG_LEVEL: INFO
+      # Docker Desktop bind mounts do not support SQLite's shared-memory WAL files reliably.
+      SQLITE_WAL: "false"
     volumes:
       # SQLite database and original uploaded reports persist on the host.
       - ./data:/app/data

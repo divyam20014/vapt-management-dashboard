@@ -5,8 +5,8 @@ from collections import Counter
 from datetime import datetime
 from typing import BinaryIO
 
-from sqlalchemy import func, select
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import func, insert, select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -16,7 +16,7 @@ from app.models import Finding, FindingOccurrence, FindingStatus, FindingStatusH
 from app.parsers.base import NormalizedFinding, ReportFile, ReportParseError, UnsupportedReportError
 from app.parsers.normalization import fingerprint
 from app.parsers.registry import detect_parser
-from app.schemas.scan import PotentialDuplicateRead, ScanRead, SeverityCounts, UploadResult
+from app.schemas.scan import BulkUploadResult, PotentialDuplicateRead, ScanRead, SeverityCounts, UploadResult
 from app.services import audit_service, duplicate_service, upload_validation
 from app.services.audit_service import AuditAction
 from app.services.project_service import get_project
@@ -33,6 +33,9 @@ _SEVERITY_COLUMNS = {
 }
 
 
+MAX_BULK_FILES = 25
+
+
 class DuplicateUploadError(AppError):
     status_code = 409
     code = "duplicate_upload"
@@ -44,9 +47,10 @@ class ProcessingFailedError(AppError):
 
 
 def _find_previous_upload(db: Session, project_id: int, file_hash: str) -> Scan | None:
+    """The latest *completed* scan of the same bytes. A file that previously failed to process can be retried."""
     return db.scalars(
         select(Scan)
-        .where(Scan.project_id == project_id, Scan.file_hash == file_hash)
+        .where(Scan.project_id == project_id, Scan.file_hash == file_hash, Scan.processing_status == ScanStatus.COMPLETED)
         .order_by(Scan.uploaded_at.desc())
         .limit(1)
     ).first()
@@ -61,8 +65,9 @@ def _load_existing_findings(db: Session, project_id: int, keys: list[str]) -> di
     return existing
 
 
-def _new_finding(project_id: int, scan_id: int, key: str, nf: NormalizedFinding, observed_at: datetime) -> Finding:
-    return Finding(
+def _new_finding_values(project_id: int, scan_id: int, key: str, nf: NormalizedFinding, observed_at: datetime) -> dict:
+    """Column values for a new finding (inserted in bulk)."""
+    return dict(
         project_id=project_id,
         scan_id=scan_id,
         finding_key=key,
@@ -88,9 +93,26 @@ def _new_finding(project_id: int, scan_id: int, key: str, nf: NormalizedFinding,
         owasp=nf.owasp,
         cvss_score=nf.cvss_score,
         source_metadata=nf.source_metadata or None,
+        status=nf.initial_status or FindingStatus.OPEN,
         first_detected=observed_at,
         last_detected=observed_at,
     )
+
+
+def _save_failed(db, project, scan_name, name, stored, file_hash, parser, uploaded_at, actor) -> "ProcessingFailedError":
+    """After a rolled-back save: record a Failed scan that keeps the original file (or delete the file if even that fails)."""
+    try:
+        failed = _record_failed_scan(
+            db, project_id=project.id, scan_name=scan_name, filename=name, stored_path=stored.relative_path,
+            file_hash=file_hash, message="An error occurred while saving the findings. No findings were saved.",
+            parser=parser, uploaded_at=uploaded_at, actor=actor,
+        )
+        details = {"scan_id": failed.id}
+    except SQLAlchemyError:
+        db.rollback()
+        stored.absolute_path.unlink(missing_ok=True)  # nothing references the file
+        details = None
+    return ProcessingFailedError("The report was parsed but could not be saved. No findings were stored.", details=details)
 
 
 def _record_failed_scan(
@@ -111,7 +133,10 @@ def _record_failed_scan(
     )
     db.add(scan)
     db.flush()
-    audit_service.record(db, actor, AuditAction.REPORT_FAILED, "scan", scan.id, {"project_id": project_id, "file": filename, "reason": message})
+    audit_service.record(
+        db, actor, AuditAction.REPORT_FAILED, "scan", scan.id, {"project_id": project_id, "file": filename, "reason": message},
+        project_id=project_id,
+    )
     db.commit()
     db.refresh(scan)
     logger.warning("Scan recorded as failed id=%s project=%s reason=%s", scan.id, project_id, message)
@@ -137,7 +162,7 @@ def process_upload(
     name, extension = upload_validation.validate_filename(filename)
     upload_validation.validate_content_type(content_type, extension)
     content = upload_validation.read_limited(stream, settings.max_upload_size_mb * 1024 * 1024)
-    upload_validation.validate_content(content)
+    upload_validation.validate_content(content, extension)
     file_hash = upload_validation.sha256_hex(content)
     logger.info("Upload received project=%s file=%r bytes=%d sha256=%s", project.id, name, len(content), file_hash[:12])
 
@@ -212,33 +237,43 @@ def process_upload(
         ]
         findings_by_key = _load_existing_findings(db, project.id, sorted({key for key, _ in keyed}))
         preexisting_keys = set(findings_by_key)
-        new_findings: list[Finding] = []
-        in_this_scan: dict[str, Finding] = {}
 
+        # Existing findings: extend their detection window. New findings: one bulk INSERT (the first
+        # record of a key in the report defines it), then load them back as ORM objects.
+        pending: dict[str, dict] = {}
         for key, nf in keyed:
             finding = findings_by_key.get(key)
-            if finding is None:
-                finding = _new_finding(project.id, scan.id, key, nf, observed_at)
-                db.add(finding)
-                findings_by_key[key] = finding
-                new_findings.append(finding)
-            else:
+            if finding is not None:
                 finding.first_detected = min(finding.first_detected, observed_at)
                 finding.last_detected = max(finding.last_detected, observed_at)
-            in_this_scan[key] = finding
-            db.add(
-                FindingOccurrence(
-                    finding=finding,
-                    scan_id=scan.id,
-                    original_title=nf.original_title,
-                    original_severity=nf.original_severity,
-                    affected_url=nf.affected_url,
-                    parameter=nf.parameter,
-                    http_method=nf.http_method,
-                    evidence=nf.evidence,
-                    raw_record=nf.raw_record,
-                )
+            elif key not in pending:
+                pending[key] = _new_finding_values(project.id, scan.id, key, nf, observed_at)
+        new_findings: list[Finding] = []
+        if pending:
+            # Plain executemany (batched); keys are unique per project, so the rows are read back by key.
+            db.execute(insert(Finding), list(pending.values()))
+            created = _load_existing_findings(db, project.id, list(pending))
+            new_findings = [created[key] for key in pending]
+            findings_by_key.update(created)
+        in_this_scan: dict[str, Finding] = {key: findings_by_key[key] for key, _ in keyed}
+
+        # Every record in the report is kept as an occurrence, verbatim (bulk INSERT).
+        occurrences = [
+            dict(
+                finding_id=findings_by_key[key].id,
+                scan_id=scan.id,
+                original_title=nf.original_title,
+                original_severity=nf.original_severity,
+                affected_url=nf.affected_url,
+                parameter=nf.parameter,
+                http_method=nf.http_method,
+                evidence=nf.evidence,
+                raw_record=nf.raw_record,
             )
+            for key, nf in keyed
+        ]
+        if occurrences:  # an empty list would run one empty INSERT
+            db.execute(insert(FindingOccurrence), occurrences)
 
         severities = Counter(finding.normalized_severity for finding in in_this_scan.values())
         scan.total_findings = len(in_this_scan)
@@ -246,40 +281,52 @@ def process_upload(
             setattr(scan, column, severities.get(severity, 0))
 
         db.flush()
-        # The timeline of every new finding starts with its detection.
+        # The timeline of every new finding starts with its detection (bulk INSERT).
+        history = []
         for finding in new_findings:
-            db.add(
-                FindingStatusHistory(
-                    finding_id=finding.id,
-                    old_status=None,
-                    new_status=FindingStatus.OPEN,
-                    changed_by=actor.id if actor else None,
-                    changed_at=uploaded_at,
-                    comment=f'Detected in scan "{scan_name}" (#{scan.id}).',
-                )
-            )
+            reported = (finding.source_metadata or {}).get("reported_status")
+            from_report = f' Status "{reported}" taken from the report.' if finding.status != FindingStatus.OPEN else ""
+            history.append(dict(
+                finding_id=finding.id,
+                old_status=None,
+                new_status=finding.status,
+                changed_by=actor.id if actor else None,
+                changed_at=uploaded_at,
+                comment=f'Detected in scan "{scan_name}" (#{scan.id}).{from_report}',
+            ))
+        if history:
+            db.execute(insert(FindingStatusHistory), history)
         duplicates = duplicate_service.detect_potential_duplicates(db, project.id, new_findings, scan.id)
         audit_service.record(
             db, actor, AuditAction.REPORT_UPLOADED, "scan", scan.id,
             {"project_id": project.id, "file": name, "parser": parser.name, "findings": len(in_this_scan),
              "new_findings": len(new_findings), "potential_duplicates": len(duplicates), "allow_duplicate": allow_duplicate},
+            project_id=project.id,
         )
-        db.commit()
-    except SQLAlchemyError:
-        db.rollback()
-        logger.exception("Database error while saving scan project=%s file=%r", project.id, name)
-        try:
-            failed = _record_failed_scan(
-                db, project_id=project.id, scan_name=scan_name, filename=name, stored_path=stored.relative_path,
-                file_hash=file_hash, message="A database error occurred while saving the findings. No findings were saved.",
-                parser=parser, uploaded_at=uploaded_at, actor=actor,
+        if previous is not None:
+            # The user was warned that identical bytes were uploaded before and chose to continue.
+            audit_service.record(
+                db, actor, AuditAction.REPORT_DUPLICATE_ACCEPTED, "scan", scan.id,
+                {"file": name, "previous_scan_id": previous.id}, project_id=project.id,
             )
-            details = {"scan_id": failed.id}
-        except SQLAlchemyError:
-            db.rollback()
-            stored.absolute_path.unlink(missing_ok=True)  # nothing references the file
-            details = None
-        raise ProcessingFailedError("The report was parsed but could not be saved. No findings were stored.", details=details)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # The same file finished uploading in another request meanwhile: report it as the duplicate it is.
+        concurrent = _find_previous_upload(db, project.id, file_hash)
+        if concurrent is not None and not allow_duplicate:
+            stored.absolute_path.unlink(missing_ok=True)
+            raise DuplicateUploadError(
+                "This report has already been uploaded to this project.",
+                details={"existing_scan": ScanRead.model_validate(concurrent).model_dump(mode="json")},
+            )
+        logger.exception("Integrity error while saving scan project=%s file=%r", project.id, name)
+        raise _save_failed(db, project, scan_name, name, stored, file_hash, parser, uploaded_at, actor)
+    except Exception:
+        # Any failure (database or otherwise) rolls back everything and records a Failed scan.
+        db.rollback()
+        logger.exception("Error while saving scan project=%s file=%r", project.id, name)
+        raise _save_failed(db, project, scan_name, name, stored, file_hash, parser, uploaded_at, actor)
 
     db.refresh(scan)
     existing_count = len(set(in_this_scan) & preexisting_keys)
@@ -324,3 +371,73 @@ def process_upload(
         ],
         warnings=warnings,
     )
+
+
+def process_bulk_upload(
+    db: Session,
+    settings: Settings,
+    *,
+    project_id: int,
+    files: list[tuple[str | None, str | None, BinaryIO]],
+    allow_duplicates: bool = False,
+    actor: User | None = None,
+) -> BulkUploadResult:
+    """Run every file through process_upload independently; one bad file never blocks the others."""
+    from app.schemas.scan import BulkFileResult
+
+    project = get_project(db, project_id)
+    if not files:
+        raise AppError("Select at least one report.")
+    if len(files) > MAX_BULK_FILES:
+        raise AppError(f"Upload at most {MAX_BULK_FILES} reports at a time.")
+
+    results: list[BulkFileResult] = []
+    for filename, content_type, stream in files:
+        name = filename or "(unnamed)"
+        try:
+            result = process_upload(
+                db, settings, project_id=project.id, filename=filename, content_type=content_type, stream=stream,
+                allow_duplicate=allow_duplicates, actor=actor,
+            )
+            results.append(BulkFileResult(
+                filename=name, outcome="created", message=None, scan=result.scan,
+                records_parsed=result.records_parsed, new_findings=result.new_findings, warnings=result.warnings,
+            ))
+        except DuplicateUploadError as exc:
+            existing = (exc.details or {}).get("existing_scan") or {}
+            results.append(BulkFileResult(
+                filename=name, outcome="duplicate", scan=None,
+                message=f'Already uploaded as "{existing.get("scan_name", "an earlier scan")}"; skipped.',
+            ))
+        except AppError as exc:
+            scan_id = exc.details.get("scan_id") if isinstance(exc.details, dict) else None
+            scan = db.get(Scan, scan_id) if scan_id else None
+            results.append(BulkFileResult(
+                filename=name, outcome="failed" if scan else "rejected", message=exc.message,
+                scan=ScanRead.model_validate(scan) if scan else None,
+            ))
+        except Exception:  # unexpected: keep going with the remaining files
+            db.rollback()
+            logger.exception("Bulk upload: unexpected error for file=%r", name)
+            results.append(BulkFileResult(filename=name, outcome="rejected", scan=None,
+                                          message="An unexpected error occurred while processing this file."))
+
+    succeeded = sum(r.outcome == "created" for r in results)
+    duplicates = sum(r.outcome == "duplicate" for r in results)
+    summary = BulkUploadResult(
+        project_id=project.id,
+        total=len(results),
+        succeeded=succeeded,
+        failed=len(results) - succeeded - duplicates,
+        duplicates=duplicates,
+        findings_added=sum(r.new_findings for r in results),
+        results=results,
+    )
+    audit_service.record(
+        db, actor, AuditAction.REPORTS_BULK_UPLOADED, "project", project.id,
+        {k: v for k, v in summary.model_dump().items() if k != "results"} | {"files": [r.filename for r in results]},
+    )
+    db.commit()
+    logger.info("Bulk upload project=%s total=%d succeeded=%d failed=%d duplicates=%d",
+                project.id, summary.total, summary.succeeded, summary.failed, summary.duplicates)
+    return summary

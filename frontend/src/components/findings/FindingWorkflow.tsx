@@ -4,8 +4,10 @@ import Button from '../ui/Button';
 import { TextAreaField } from '../ui/FormField';
 import { findingService } from '../../services/findingService';
 import { toApiError } from '../../services/api';
-import { useActingUser } from '../../hooks/useActingUser';
-import { FINDING_STATUSES, type FindingStatus } from '../../utils/constants';
+import { useUsers } from '../../hooks/useUsers';
+import { useAuth } from '../../hooks/useAuth';
+import { FindingStatusBadge } from './Badges';
+import { FINDING_STATUSES, PERMISSIONS, type FindingStatus } from '../../utils/constants';
 import type { FindingDetail } from '../../types/finding';
 
 const CONTROL =
@@ -13,7 +15,30 @@ const CONTROL =
 
 /** Status and assignment. The server is the source of truth: the page shows what the API returns. */
 export default function FindingWorkflow({ finding, onSaved }: { finding: FindingDetail; onSaved: (updated: FindingDetail) => void }) {
-  const { activeUsers, actingUser } = useActingUser();
+  if (!useAuth().can(PERMISSIONS.findingsUpdate)) {
+    return (
+      <Card title="Remediation">
+        <dl className="space-y-3 text-sm">
+          <div>
+            <dt className="text-slate-500">Status</dt>
+            <dd className="mt-1">
+              <FindingStatusBadge status={finding.status} />
+            </dd>
+          </div>
+          <div>
+            <dt className="text-slate-500">Assignee</dt>
+            <dd className="mt-1 text-slate-900">{finding.assignee?.name ?? 'Unassigned'}</dd>
+          </div>
+        </dl>
+        <p className="mt-4 text-xs text-slate-500">Your role can view findings but not change them.</p>
+      </Card>
+    );
+  }
+  return <WorkflowEditor finding={finding} onSaved={onSaved} />;
+}
+
+function WorkflowEditor({ finding, onSaved }: { finding: FindingDetail; onSaved: (updated: FindingDetail) => void }) {
+  const { activeUsers } = useUsers();
   const [status, setStatus] = useState<FindingStatus>(finding.status);
   const [assignee, setAssignee] = useState<string>(finding.assignee ? String(finding.assignee.id) : '');
   const [comment, setComment] = useState('');
@@ -58,11 +83,6 @@ export default function FindingWorkflow({ finding, onSaved }: { finding: Finding
   return (
     <Card title="Remediation">
       <div className="space-y-4">
-        {!actingUser && (
-          <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            Choose who you are acting as (top bar) to change status or assignment.
-          </p>
-        )}
         <div>
           <label htmlFor="finding-status" className="mb-1.5 block text-sm font-medium text-slate-700">
             Status
@@ -106,7 +126,7 @@ export default function FindingWorkflow({ finding, onSaved }: { finding: Finding
             Saved.
           </p>
         )}
-        <Button className="w-full" onClick={save} loading={busy} disabled={!actingUser || (!statusChanged && !assigneeChanged)}>
+        <Button className="w-full" onClick={save} loading={busy} disabled={!statusChanged && !assigneeChanged}>
           Save changes
         </Button>
       </div>

@@ -43,6 +43,8 @@ class ScanStatus(str, Enum):
 class Scanner(str, Enum):
     ZAP = "OWASP ZAP"
     NUCLEI = "Nuclei"
+    # Tabular or document reports whose producing tool is not identified by the file format.
+    IMPORTED = "Imported report"
 
 
 class ReportType(str, Enum):
@@ -51,6 +53,9 @@ class ReportType(str, Enum):
     JSONL = "JSONL"
     XML = "XML"
     TXT = "TXT"
+    CSV = "CSV"
+    XLSX = "XLSX"
+    PDF = "PDF"
 
 
 class DuplicateConfidence(str, Enum):

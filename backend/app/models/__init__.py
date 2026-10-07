@@ -13,13 +13,15 @@ from app.models.enums import (
 from app.models.activity import AuditLog, FindingStatusHistory
 from app.models.finding import Finding, FindingOccurrence, PotentialDuplicate
 from app.models.project import Project
+from app.models.remediation import RemediationGuideline
 from app.models.scan import Scan
-from app.models.user import User
+from app.models.user import User, UserSession
 
 __all__ = [
     "AuditLog",
     "FindingStatusHistory",
     "User",
+    "UserSession",
     "UserRole",
     "DuplicateConfidence",
     "DuplicateDecision",
@@ -28,6 +30,7 @@ __all__ = [
     "FindingStatus",
     "PotentialDuplicate",
     "Project",
+    "RemediationGuideline",
     "ProjectEnvironment",
     "ProjectStatus",
     "ReportType",

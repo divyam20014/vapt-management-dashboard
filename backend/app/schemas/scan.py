@@ -54,6 +54,28 @@ class PotentialDuplicateRead(BaseModel):
     confidence: DuplicateConfidence
 
 
+class BulkFileResult(BaseModel):
+    filename: str
+    # created: processed; duplicate: identical file already uploaded (skipped);
+    # failed: stored but could not be parsed; rejected: refused by validation (not stored)
+    outcome: str
+    message: str | None
+    scan: ScanRead | None
+    records_parsed: int = 0
+    new_findings: int = 0
+    warnings: list[str] = []
+
+
+class BulkUploadResult(BaseModel):
+    project_id: int
+    total: int
+    succeeded: int
+    failed: int
+    duplicates: int
+    findings_added: int
+    results: list[BulkFileResult]
+
+
 class UploadResult(BaseModel):
     scan: ScanRead
     parser: str

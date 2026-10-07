@@ -1,6 +1,7 @@
 """Findings workspace: server-side filtering/sorting/pagination, details, status and assignment."""
 
 import logging
+from typing import Any
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from enum import Enum
@@ -23,6 +24,7 @@ from app.models import (
 from app.schemas.finding import (
     BulkFindingUpdate,
     BulkUpdateResult,
+    DuplicateDecisionUpdate,
     FindingDetail,
     FindingFacets,
     FindingListItem,
@@ -30,10 +32,11 @@ from app.schemas.finding import (
     OccurrenceRaw,
     OccurrenceRead,
     RelatedDuplicate,
+    StandardGuidanceRef,
     StatusHistoryRead,
 )
 from app.schemas.user import UserRef
-from app.services import audit_service
+from app.services import audit_service, remediation_service
 from app.services.audit_service import AuditAction
 
 logger = logging.getLogger(__name__)
@@ -104,6 +107,18 @@ class FindingFilters:
     date_field: DateField = DateField.LAST_DETECTED
     date_from: date | None = None
     date_to: date | None = None
+    # Standard remediation guideline slug, and its SQL condition (resolved by the API dependency).
+    remediation: str | None = None
+    remediation_condition: Any = field(default=None, repr=False, compare=False)
+
+
+IN_CHUNK = 500
+
+
+def contains_pattern(text: str) -> str:
+    """A LIKE pattern matching `text` literally: % and _ typed by the user are not wildcards (escape '\\')."""
+    escaped = text.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _day_start(day: date) -> datetime:
@@ -112,21 +127,20 @@ def _day_start(day: date) -> datetime:
 
 def _apply_filters(query: Select, filters: FindingFilters) -> Select:
     if filters.search and filters.search.strip():
-        pattern = f"%{filters.search.strip()}%"
+        pattern = contains_pattern(filters.search)
         query = query.where(
-            or_(
-                Finding.normalized_title.ilike(pattern),
-                Finding.original_title.ilike(pattern),
-                Finding.affected_url.ilike(pattern),
-                Finding.endpoint.ilike(pattern),
-                Finding.parameter.ilike(pattern),
-                Finding.cwe.ilike(pattern),
-                Finding.source_template.ilike(pattern),
-                Finding.description.ilike(pattern),
-            )
+            or_(*[
+                column.ilike(pattern, escape="\\")
+                for column in (
+                    Finding.normalized_title, Finding.original_title, Finding.affected_url, Finding.endpoint,
+                    Finding.parameter, Finding.cwe, Finding.source_template, Finding.description,
+                )
+            ])
         )
     if filters.project_ids:
         query = query.where(Finding.project_id.in_(filters.project_ids))
+    if filters.remediation_condition is not None:
+        query = query.where(filters.remediation_condition)
     if filters.scan_id is not None:
         query = query.where(
             Finding.id.in_(select(FindingOccurrence.finding_id).where(FindingOccurrence.scan_id == filters.scan_id))
@@ -204,18 +218,32 @@ def list_findings(
 ) -> tuple[list[FindingListItem], int]:
     base = _apply_filters(select(Finding.id).join(Project, Finding.project_id == Project.id), filters)
     total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    query = _ordered_query(filters, sort_by, sort_order)
+    rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).unique().all()
+    return [_list_item(finding, count) for finding, count in rows], total
 
+
+def _ordered_query(filters: FindingFilters, sort_by: FindingSortField, sort_order: SortOrder) -> Select:
     counts = _occurrence_counts()
     column = _SORT_COLUMNS[sort_by]
     ordering = column.asc() if sort_order == SortOrder.ASC else column.desc()
-    query = _apply_filters(
+    return _apply_filters(
         select(Finding, counts.c.occurrence_count)
         .join(Project, Finding.project_id == Project.id)
         .outerjoin(counts, counts.c.finding_id == Finding.id),
         filters,
     ).order_by(ordering, Finding.last_detected.desc(), Finding.id.desc())
-    rows = db.execute(query.offset((page - 1) * page_size).limit(page_size)).unique().all()
-    return [_list_item(finding, count) for finding, count in rows], total
+
+
+def all_findings(
+    db: Session,
+    filters: FindingFilters,
+    sort_by: FindingSortField = FindingSortField.SEVERITY,
+    sort_order: SortOrder = SortOrder.DESC,
+) -> list[tuple[Finding, int]]:
+    """Every finding matching the filters (exports), as (finding, observation count)."""
+    rows = db.execute(_ordered_query(filters, sort_by, sort_order)).unique().all()
+    return [(finding, count or 0) for finding, count in rows]
 
 
 def list_items_by_ids(db: Session, finding_ids: list[int]) -> dict[int, FindingListItem]:
@@ -223,12 +251,16 @@ def list_items_by_ids(db: Session, finding_ids: list[int]) -> dict[int, FindingL
     if not finding_ids:
         return {}
     counts = _occurrence_counts()
-    rows = db.execute(
-        select(Finding, counts.c.occurrence_count)
-        .outerjoin(counts, counts.c.finding_id == Finding.id)
-        .where(Finding.id.in_(finding_ids))
-    ).unique().all()
-    return {finding.id: _list_item(finding, count) for finding, count in rows}
+    items: dict[int, FindingListItem] = {}
+    ids = list(finding_ids)
+    for start in range(0, len(ids), IN_CHUNK):  # SQLite limits the number of bound parameters
+        rows = db.execute(
+            select(Finding, counts.c.occurrence_count)
+            .outerjoin(counts, counts.c.finding_id == Finding.id)
+            .where(Finding.id.in_(ids[start : start + IN_CHUNK]))
+        ).unique().all()
+        items.update({finding.id: _list_item(finding, count) for finding, count in rows})
+    return items
 
 
 def get_finding(db: Session, finding_id: int) -> Finding:
@@ -267,7 +299,15 @@ def get_finding_detail(db: Session, finding_id: int) -> FindingDetail:
     }
 
     item = _list_item(finding, len(occurrences))
+    guidance = remediation_service.match_finding(finding, remediation_service.LibraryIndex.load(db))
     return FindingDetail(
+        standard_guidance=[
+            StandardGuidanceRef(
+                slug=m.guideline.slug, title=m.guideline.title, category=m.guideline.category,
+                summary=m.guideline.summary, match_type=m.match_type, basis=m.basis,
+            )
+            for m in guidance
+        ],
         **item.model_dump(),
         scan_id=finding.scan_id,
         finding_key=finding.finding_key,
@@ -393,12 +433,21 @@ def update_finding(db: Session, finding_id: int, data: FindingUpdate, actor: Use
     changed = _apply(db, finding, data, assign, assignee, actor)
     comment = (data.comment or "").strip() or None
     if "status" in changed:
-        audit_service.record(db, actor, AuditAction.FINDING_STATUS_CHANGED, "finding", finding.id, {**changed["status"], "comment": comment})
+        audit_service.record(
+            db, actor, AuditAction.FINDING_STATUS_CHANGED, "finding", finding.id, {**changed["status"], "comment": comment},
+            project_id=finding.project_id,
+        )
     if "assigned_to" in changed:
-        audit_service.record(db, actor, AuditAction.FINDING_ASSIGNED, "finding", finding.id, changed["assigned_to"])
+        audit_service.record(
+            db, actor, AuditAction.FINDING_ASSIGNED, "finding", finding.id, changed["assigned_to"], project_id=finding.project_id
+        )
     db.commit()
     logger.info("Finding updated id=%s by user=%s changes=%s", finding.id, actor.id, sorted(changed))
     return get_finding_detail(db, finding.id)
+
+
+def _single(values: set) -> int | None:
+    return next(iter(values)) if len(values) == 1 else None
 
 
 def bulk_update(db: Session, data: BulkFindingUpdate, actor: User) -> BulkUpdateResult:
@@ -428,6 +477,9 @@ def bulk_update(db: Session, data: BulkFindingUpdate, actor: User) -> BulkUpdate
                     "assigned_to": (assignee.id if assignee else None) if assign else "unchanged",
                     "comment": (data.comment or "").strip() or None,
                 },
+                # One entry for the whole operation; it names a project/finding only when there is exactly one.
+                project_id=_single({findings[i].project_id for i in updated_ids}),
+                finding_id=updated_ids[0] if len(updated_ids) == 1 else None,
             )
         db.commit()
     except Exception:
@@ -435,3 +487,24 @@ def bulk_update(db: Session, data: BulkFindingUpdate, actor: User) -> BulkUpdate
         raise
     logger.info("Bulk update by user=%s requested=%d updated=%d", actor.id, len(ids), len(updated_ids))
     return BulkUpdateResult(requested=len(ids), updated=len(updated_ids), unchanged=len(ids) - len(updated_ids), updated_ids=updated_ids)
+
+
+def decide_duplicate(db: Session, finding_id: int, pair_id: int, data: DuplicateDecisionUpdate, actor: User) -> FindingDetail:
+    """Record a human decision on a potential-duplicate pair. Neither finding's data is changed."""
+    finding = get_finding(db, finding_id)
+    pair = db.get(PotentialDuplicate, pair_id)
+    if pair is None or finding_id not in (pair.finding_id, pair.candidate_finding_id):
+        raise NotFoundError(f"Potential duplicate {pair_id} was not found for finding {finding_id}.")
+    if pair.decision != data.decision:
+        other_id = pair.candidate_finding_id if pair.finding_id == finding_id else pair.finding_id
+        audit_service.record(
+            db, actor, AuditAction.DUPLICATE_DECIDED, "finding", finding.id,
+            {"pair_id": pair.id, "other_finding_id": other_id, "from": pair.decision.value, "to": data.decision.value,
+             "comment": (data.comment or "").strip() or None},
+            project_id=finding.project_id,
+        )
+        pair.decision = data.decision
+        db.commit()
+        logger.info("Duplicate decision pair=%s decision=%s by user=%s", pair.id, data.decision.value, actor.id)
+    return get_finding_detail(db, finding.id)
+

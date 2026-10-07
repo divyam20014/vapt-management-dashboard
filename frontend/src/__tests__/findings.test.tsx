@@ -5,6 +5,7 @@ import { renderApp } from '../test/render';
 import { findingService } from '../services/findingService';
 import { projectService } from '../services/projectService';
 import { userService } from '../services/userService';
+import { signInAs } from '../test/auth';
 import { ApiError } from '../types/api';
 import { buildProject, pageOf } from '../test/fixtures';
 import type { FindingDetail, FindingListItem } from '../types/finding';
@@ -13,8 +14,8 @@ import type { User } from '../types/user';
 vi.mock('../services/findingService');
 vi.mock('../services/projectService');
 
-const ALICE: User = { id: 1, name: 'Alice Analyst', email: 'alice@example.com', role: 'Security Analyst', active: true, created_at: '2026-10-01T00:00:00Z' };
-const BOB: User = { id: 2, name: 'Bob Admin', email: 'bob@example.com', role: 'Admin', active: true, created_at: '2026-10-01T00:00:00Z' };
+const ALICE: User = { id: 1, name: 'Alice Analyst', email: 'alice@example.com', role: 'Security Analyst', active: true, created_at: '2026-10-01T00:00:00Z', can_sign_in: true, last_login_at: null };
+const BOB: User = { id: 2, name: 'Bob Admin', email: 'bob@example.com', role: 'Admin', active: true, created_at: '2026-10-01T00:00:00Z', can_sign_in: false, last_login_at: null };
 
 function item(overrides: Partial<FindingListItem> = {}): FindingListItem {
   return {
@@ -80,12 +81,9 @@ function detail(overrides: Partial<FindingDetail> = {}): FindingDetail {
       { id: 1, old_status: null, new_status: 'Open', changed_by: null, changed_at: '2026-10-07T10:10:00Z', comment: 'Detected in scan "ZAP baseline" (#1).' },
     ],
     potential_duplicates: [],
+    standard_guidance: [],
     ...overrides,
   };
-}
-
-function actAs(user: User) {
-  window.localStorage.setItem('vapt.actingUserId', String(user.id));
 }
 
 describe('Findings workspace', () => {
@@ -151,11 +149,10 @@ describe('Findings workspace', () => {
 
   it('bulk-updates the selected findings in one request and reloads from the server', async () => {
     const user = userEvent.setup();
-    actAs(ALICE);
+    signInAs('Security Analyst');
     vi.mocked(findingService.bulkUpdate).mockResolvedValue({ requested: 2, updated: 2, unchanged: 0, updated_ids: [1, 2] });
     renderApp('/findings');
     await screen.findByText('Timestamp Disclosure - Unix');
-    await waitFor(() => expect(screen.getByLabelText('Acting as')).toHaveValue('1'));
 
     await user.click(screen.getByLabelText('Select all findings on this page'));
     const bar = screen.getByRole('region', { name: 'Bulk actions' });
@@ -177,25 +174,21 @@ describe('Findings workspace', () => {
     await waitFor(() => expect(vi.mocked(findingService.list).mock.calls.length).toBeGreaterThan(callsBefore));
   });
 
-  it('cannot bulk-update without choosing who is acting', async () => {
-    const user = userEvent.setup();
+  it('gives a Viewer no selection or bulk actions (read-only)', async () => {
+    signInAs('Viewer');
     renderApp('/findings');
     await screen.findByText('Timestamp Disclosure - Unix');
-    await user.click(screen.getByLabelText('Select Timestamp Disclosure - Unix'));
-    await user.click(screen.getByRole('button', { name: /Change status/ }));
-    const dialog = await screen.findByRole('dialog');
-    await user.selectOptions(within(dialog).getByLabelText('New status'), 'Closed');
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('Choose who you are acting as');
-    expect(within(dialog).getByRole('button', { name: 'Update 1 finding' })).toBeDisabled();
+    expect(screen.queryByLabelText('Select all findings on this page')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Select Timestamp Disclosure - Unix')).not.toBeInTheDocument();
+    // Exports are read access and remain available.
+    expect(screen.getByRole('button', { name: /Export 2 findings/ })).toBeInTheDocument();
   });
 
   it('shows bulk failures and leaves the selection in place', async () => {
     const user = userEvent.setup();
-    actAs(ALICE);
     vi.mocked(findingService.bulkUpdate).mockRejectedValue(new ApiError('1 selected finding(s) no longer exist. Nothing was changed.', 404, 'not_found'));
     renderApp('/findings');
     await screen.findByText('Timestamp Disclosure - Unix');
-    await waitFor(() => expect(screen.getByLabelText('Acting as')).toHaveValue('1'));
     await user.click(screen.getByLabelText('Select all findings on this page'));
     await user.click(screen.getByRole('button', { name: /Change status/ }));
     const dialog = await screen.findByRole('dialog');
@@ -243,7 +236,7 @@ describe('Finding detail', () => {
 
   it('saves a status change and shows the result returned by the server', async () => {
     const user = userEvent.setup();
-    actAs(ALICE);
+    signInAs('Security Analyst');
     vi.mocked(findingService.update).mockResolvedValue(
       detail({
         status: 'In Progress',
@@ -270,20 +263,21 @@ describe('Finding detail', () => {
     expect(history).toHaveTextContent('Fixing CORS');
   });
 
-  it('requires an acting user before saving', async () => {
+  it('shows status and assignment read-only to a Viewer', async () => {
+    signInAs('Viewer');
     renderApp('/findings/7');
     await screen.findByRole('heading', { level: 1, name: 'Cross-Domain Misconfiguration' });
-    expect(screen.getByText(/Choose who you are acting as/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    expect(screen.getByText('Your role can view findings but not change them.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save changes' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Status')).not.toBeInTheDocument();
   });
 
   it('shows server errors from a status change', async () => {
     const user = userEvent.setup();
-    actAs(ALICE);
     vi.mocked(findingService.update).mockRejectedValue(new ApiError('Bob Admin is inactive and cannot be assigned findings.', 400, 'bad_request'));
     renderApp('/findings/7');
     await screen.findByRole('heading', { level: 1, name: 'Cross-Domain Misconfiguration' });
-    await waitFor(() => expect(screen.getByLabelText('Acting as')).toHaveValue('1'));
+    await screen.findByRole('option', { name: 'Bob Admin' });
     await user.selectOptions(screen.getByLabelText('Assignee'), 'Bob Admin');
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
     expect(await screen.findByText('Bob Admin is inactive and cannot be assigned findings.')).toBeInTheDocument();
@@ -306,8 +300,8 @@ describe('Finding detail', () => {
   });
 });
 
-describe('Users and acting user', () => {
-  it('adds a user from Settings and lets you act as them', async () => {
+describe('User management (Admin)', () => {
+  it('adds a user with an initial password and a role', async () => {
     const user = userEvent.setup();
     vi.mocked(userService.list).mockResolvedValueOnce([]).mockResolvedValue([ALICE]);
     vi.mocked(userService.create).mockResolvedValue(ALICE);
@@ -318,11 +312,37 @@ describe('Users and acting user', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Add user' });
     await user.type(within(dialog).getByLabelText(/Name/), 'Alice Analyst');
     await user.type(within(dialog).getByLabelText(/Email/), 'alice@example.com');
+    await user.type(within(dialog).getByLabelText(/Initial password/), 'short');
     await user.click(within(dialog).getByRole('button', { name: 'Add user' }));
+    expect(within(dialog).getByText('Use at least 12 characters.')).toBeInTheDocument();
+    expect(userService.create).not.toHaveBeenCalled();
 
-    expect(userService.create).toHaveBeenCalledWith({ name: 'Alice Analyst', email: 'alice@example.com', role: 'Security Analyst' });
-    await user.click(await screen.findByRole('button', { name: 'Act as' }));
-    expect(screen.getByLabelText('Acting as')).toHaveValue('1');
-    expect(window.localStorage.getItem('vapt.actingUserId')).toBe('1');
+    await user.clear(within(dialog).getByLabelText(/Initial password/));
+    await user.type(within(dialog).getByLabelText(/Initial password/), 'correct-horse-battery');
+    await user.click(within(dialog).getByRole('button', { name: 'Add user' }));
+    expect(userService.create).toHaveBeenCalledWith({ name: 'Alice Analyst', email: 'alice@example.com', role: 'Security Analyst', password: 'correct-horse-battery' });
+    expect(await screen.findByText('Alice Analyst')).toBeInTheDocument();
+  });
+
+  it('resets a password', async () => {
+    const user = userEvent.setup();
+    vi.mocked(userService.list).mockResolvedValue([ALICE, BOB]);
+    vi.mocked(userService.setPassword).mockResolvedValue({ ...BOB, can_sign_in: true });
+    renderApp('/settings');
+    expect(await screen.findByText('No password set')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Set password for Bob Admin' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Set password for Bob Admin' });
+    await user.type(within(dialog).getByLabelText(/New password/), 'bobs-new-password-1');
+    await user.click(within(dialog).getByRole('button', { name: 'Set password' }));
+    expect(userService.setPassword).toHaveBeenCalledWith(2, 'bobs-new-password-1');
+    expect(await screen.findByText('Password set for Bob Admin.')).toBeInTheDocument();
+  });
+
+  it('hides user management from other roles', async () => {
+    signInAs('Security Analyst');
+    vi.mocked(userService.list).mockResolvedValue([ALICE]);
+    renderApp('/settings');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Settings' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Add user' })).not.toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { Pencil, Plus, UserRound } from 'lucide-react';
+import { KeyRound, Pencil, Plus, UserRound } from 'lucide-react';
 import Card from '../ui/Card';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
@@ -7,21 +7,30 @@ import { SelectField, TextField } from '../ui/FormField';
 import EmptyState from '../states/EmptyState';
 import { userService } from '../../services/userService';
 import { toApiError } from '../../services/api';
-import { useActingUser } from '../../hooks/useActingUser';
-import { USER_ROLES, type UserRole } from '../../utils/constants';
+import { useUsers } from '../../hooks/useUsers';
+import { useAuth } from '../../hooks/useAuth';
+import { PASSWORD_MIN_LENGTH, USER_ROLES, type UserRole } from '../../utils/constants';
+import { formatDateTime } from '../../utils/format';
 import type { User, UserInput } from '../../types/user';
 
-const EMPTY: UserInput = { name: '', email: '', role: 'Security Analyst' };
+const EMPTY = { name: '', email: '', role: 'Security Analyst' as UserRole, password: '' };
+type FormErrors = Partial<Record<keyof typeof EMPTY, string>>;
+
+const ROLE_HELP: Record<UserRole, string> = {
+  Admin: 'Everything, including users, project deletion and the audit log.',
+  'Security Analyst': 'Create and edit projects, upload reports, update findings and decide on duplicates.',
+  Viewer: 'Read-only: dashboards, projects, scans and findings, and exports.',
+};
 
 function UserFormModal({ open, user, onClose, onSaved }: { open: boolean; user: User | null; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState<UserInput>(EMPTY);
-  const [errors, setErrors] = useState<Partial<Record<keyof UserInput, string>>>({});
+  const [form, setForm] = useState(EMPTY);
+  const [errors, setErrors] = useState<FormErrors>({});
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setForm(user ? { name: user.name, email: user.email, role: user.role } : EMPTY);
+      setForm(user ? { name: user.name, email: user.email, role: user.role, password: '' } : EMPTY);
       setErrors({});
       setSubmitError(null);
     }
@@ -29,23 +38,24 @@ function UserFormModal({ open, user, onClose, onSaved }: { open: boolean; user: 
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const next: typeof errors = {};
+    const next: FormErrors = {};
     if (!form.name.trim()) next.name = 'Name is required.';
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) next.email = 'Enter a valid email address.';
+    if (!user && form.password && form.password.length < PASSWORD_MIN_LENGTH) next.password = `Use at least ${PASSWORD_MIN_LENGTH} characters.`;
     setErrors(next);
     if (Object.keys(next).length) return;
     setBusy(true);
     setSubmitError(null);
     try {
-      const payload = { name: form.name.trim(), email: form.email.trim(), role: form.role };
+      const payload: UserInput = { name: form.name.trim(), email: form.email.trim(), role: form.role };
       if (user) await userService.update(user.id, payload);
-      else await userService.create(payload);
+      else await userService.create(form.password ? { ...payload, password: form.password } : payload);
       onSaved();
     } catch (err) {
       const apiError = toApiError(err);
-      const fieldErrors: typeof errors = {};
+      const fieldErrors: FormErrors = {};
       apiError.fieldErrors.forEach((f) => {
-        if (f.field in EMPTY) fieldErrors[f.field as keyof UserInput] = f.message;
+        if (f.field in EMPTY) fieldErrors[f.field as keyof typeof EMPTY] = f.message;
       });
       setErrors(fieldErrors);
       setSubmitError(apiError.message);
@@ -82,23 +92,101 @@ function UserFormModal({ open, user, onClose, onSaved }: { open: boolean; user: 
           label="Role"
           options={USER_ROLES}
           value={form.role}
-          hint="Stored now; enforced when sign-in is added."
+          hint={ROLE_HELP[form.role]}
           onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}
+        />
+        {!user && (
+          <TextField
+            label="Initial password"
+            type="password"
+            autoComplete="new-password"
+            value={form.password}
+            error={errors.password}
+            hint={`At least ${PASSWORD_MIN_LENGTH} characters. Leave empty to add someone who can be assigned findings but cannot sign in yet.`}
+            onChange={(e) => setForm({ ...form, password: e.target.value })}
+          />
+        )}
+      </form>
+    </Modal>
+  );
+}
+
+function SetPasswordModal({ user, onClose, onSaved }: { user: User | null; onClose: () => void; onSaved: () => void }) {
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setPassword('');
+    setError(null);
+  }, [user]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!user) return;
+    if (password.length < PASSWORD_MIN_LENGTH) {
+      setError(`Use at least ${PASSWORD_MIN_LENGTH} characters.`);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await userService.setPassword(user.id, password);
+      onSaved();
+    } catch (err) {
+      setError(toApiError(err).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={user !== null}
+      size="sm"
+      title={user?.can_sign_in ? `Reset password for ${user.name}` : `Set password for ${user?.name ?? ''}`}
+      description="Share it with them privately. They are signed out everywhere and can change it after signing in."
+      onClose={busy ? () => undefined : onClose}
+      footer={
+        <>
+          <Button variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="submit" form="set-password-form" loading={busy}>
+            Set password
+          </Button>
+        </>
+      }
+    >
+      <form id="set-password-form" noValidate onSubmit={submit}>
+        <TextField
+          label="New password"
+          type="password"
+          autoComplete="new-password"
+          required
+          value={password}
+          error={error ?? undefined}
+          hint={`At least ${PASSWORD_MIN_LENGTH} characters.`}
+          onChange={(e) => setPassword(e.target.value)}
         />
       </form>
     </Modal>
   );
 }
 
-/** People who can be assigned findings and who record changes. */
+/** User accounts and roles. Admin only (the API refuses these changes for other roles). */
 export default function UsersCard() {
-  const { users, actingUser, setActingUser, reloadUsers, loaded } = useActingUser();
+  const { users, reloadUsers, loaded } = useUsers();
+  const { user: me } = useAuth();
   const [editing, setEditing] = useState<User | null>(null);
   const [formOpen, setFormOpen] = useState(false);
+  const [passwordFor, setPasswordFor] = useState<User | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const toggleActive = async (user: User) => {
     setError(null);
+    setNotice(null);
     try {
       await userService.update(user.id, { active: !user.active });
       reloadUsers();
@@ -110,7 +198,7 @@ export default function UsersCard() {
   return (
     <Card
       title="Users"
-      description="Used for assignment and to record who changed what. This is not sign-in; authentication is added in a later phase."
+      description="Accounts that can sign in, and people who can be assigned findings. Roles are enforced by the server."
       bodyClassName=""
       actions={
         <Button
@@ -130,8 +218,13 @@ export default function UsersCard() {
           {error}
         </p>
       )}
+      {notice && (
+        <p role="status" className="mx-5 mt-4 rounded-md bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+          {notice}
+        </p>
+      )}
       {loaded && users.length === 0 ? (
-        <EmptyState compact icon={<UserRound className="size-5" aria-hidden />} title="No users yet" description="Add yourself first so status changes can be attributed to you." />
+        <EmptyState compact icon={<UserRound className="size-5" aria-hidden />} title="No users yet" description="Add the people who work on your projects." />
       ) : (
         <div className="relative overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -140,6 +233,7 @@ export default function UsersCard() {
                 <th scope="col" className="px-5 py-2">Name</th>
                 <th scope="col" className="px-5 py-2">Email</th>
                 <th scope="col" className="px-5 py-2">Role</th>
+                <th scope="col" className="px-5 py-2">Sign-in</th>
                 <th scope="col" className="px-5 py-2">Status</th>
                 <th scope="col" className="px-5 py-2 text-right"><span className="sr-only">Actions</span></th>
               </tr>
@@ -147,19 +241,25 @@ export default function UsersCard() {
             <tbody className="divide-y divide-slate-100">
               {users.map((user) => (
                 <tr key={user.id} className={user.active ? '' : 'text-slate-400'}>
-                  <td className="px-5 py-2 font-medium">
+                  <td className="px-5 py-2 font-medium whitespace-nowrap">
                     {user.name}
-                    {actingUser?.id === user.id && <span className="ml-2 rounded bg-teal-50 px-1.5 py-0.5 text-xs font-medium text-teal-700">acting as</span>}
+                    {me?.id === user.id && <span className="ml-2 rounded bg-teal-50 px-1.5 py-0.5 text-xs font-medium text-teal-700">you</span>}
                   </td>
                   <td className="px-5 py-2">{user.email}</td>
-                  <td className="px-5 py-2">{user.role}</td>
+                  <td className="px-5 py-2 whitespace-nowrap">{user.role}</td>
+                  <td className="px-5 py-2 text-xs whitespace-nowrap">
+                    {user.can_sign_in ? (user.last_login_at ? `Last ${formatDateTime(user.last_login_at)}` : 'Never signed in') : 'No password set'}
+                  </td>
                   <td className="px-5 py-2">{user.active ? 'Active' : 'Inactive'}</td>
                   <td className="space-x-2 px-5 py-2 text-right whitespace-nowrap">
-                    {user.active && actingUser?.id !== user.id && (
-                      <button type="button" onClick={() => setActingUser(user.id)} className="text-xs font-medium text-teal-700 hover:text-teal-800">
-                        Act as
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setPasswordFor(user)}
+                      className="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                      aria-label={`${user.can_sign_in ? 'Reset' : 'Set'} password for ${user.name}`}
+                    >
+                      <KeyRound className="size-4" aria-hidden />
+                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -171,9 +271,11 @@ export default function UsersCard() {
                     >
                       <Pencil className="size-4" aria-hidden />
                     </button>
-                    <button type="button" onClick={() => void toggleActive(user)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
-                      {user.active ? 'Deactivate' : 'Activate'}
-                    </button>
+                    {me?.id !== user.id && (
+                      <button type="button" onClick={() => void toggleActive(user)} className="text-xs font-medium text-slate-600 hover:text-slate-900">
+                        {user.active ? 'Deactivate' : 'Activate'}
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -187,6 +289,15 @@ export default function UsersCard() {
         onClose={() => setFormOpen(false)}
         onSaved={() => {
           setFormOpen(false);
+          reloadUsers();
+        }}
+      />
+      <SetPasswordModal
+        user={passwordFor}
+        onClose={() => setPasswordFor(null)}
+        onSaved={() => {
+          setNotice(`Password set for ${passwordFor?.name}.`);
+          setPasswordFor(null);
           reloadUsers();
         }}
       />

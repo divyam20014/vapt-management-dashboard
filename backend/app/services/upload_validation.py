@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 CHUNK_SIZE = 1024 * 1024
 MAX_FILENAME_LENGTH = 255
 
-ALLOWED_EXTENSIONS = (".html", ".htm", ".json", ".jsonl", ".xml", ".txt")
+ALLOWED_EXTENSIONS = (".html", ".htm", ".json", ".jsonl", ".xml", ".txt", ".csv", ".xlsx", ".pdf")
+BINARY_SIGNATURES = {".xlsx": b"PK\x03\x04", ".pdf": b"%PDF-"}
 
 _GENERIC_TYPES = {"", "application/octet-stream", "text/plain"}
 ALLOWED_CONTENT_TYPES: dict[str, set[str]] = {
@@ -26,6 +27,9 @@ ALLOWED_CONTENT_TYPES: dict[str, set[str]] = {
     ".jsonl": {"application/jsonl", "application/x-ndjson", "application/x-jsonlines", "application/json"} | _GENERIC_TYPES,
     ".xml": {"application/xml", "text/xml"} | _GENERIC_TYPES,
     ".txt": _GENERIC_TYPES,
+    ".csv": {"text/csv", "application/csv", "text/comma-separated-values", "application/vnd.ms-excel"} | _GENERIC_TYPES,
+    ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/zip", "", "application/octet-stream"},
+    ".pdf": {"application/pdf", "application/x-pdf", "", "application/octet-stream"},
 }
 
 # Signatures of binary/executable formats that must never be accepted as reports.
@@ -97,8 +101,13 @@ def read_limited(stream: BinaryIO, max_bytes: int) -> bytes:
     return content
 
 
-def validate_content(content: bytes) -> None:
-    """Reports must be text. Binary and executable content is rejected."""
+def validate_content(content: bytes, extension: str = ".json") -> None:
+    """Text formats must be text; XLSX and PDF must carry their own file signature. Executables are rejected."""
+    expected = BINARY_SIGNATURES.get(extension)
+    if expected is not None:
+        if not content.startswith(expected):
+            raise UnsupportedMediaError(f"The file content is not a {extension.lstrip('.').upper()} document.")
+        return
     for signature, label in _BINARY_SIGNATURES.items():
         if content.startswith(signature):
             raise UnsupportedMediaError(f"The file content looks like a {label}, not a text report.")

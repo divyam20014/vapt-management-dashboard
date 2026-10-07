@@ -1,3 +1,4 @@
+import { listProjectOptions } from '../services/projectOptions';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, GitCompare, TriangleAlert } from 'lucide-react';
@@ -8,7 +9,6 @@ import LoadingState from '../components/states/LoadingState';
 import ErrorState from '../components/states/ErrorState';
 import { FindingStatusBadge, SeverityBadge } from '../components/findings/Badges';
 import { scanService } from '../services/scanService';
-import { projectService } from '../services/projectService';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { CLASSIFICATIONS, CLASSIFICATION_STYLES } from '../utils/constants';
@@ -24,7 +24,7 @@ const scanLabel = (scan: Scan) => `${scan.scan_name} — ${formatDateTime(scan.s
 
 function ScanPicker({ onPick }: { onPick: (base: number, compare: number) => void }) {
   const [params] = useSearchParams();
-  const projects = useApiQuery(() => projectService.list({ page_size: 100, sort_by: 'name', sort_order: 'asc' }), []);
+  const projects = useApiQuery(() => listProjectOptions(), []);
   const [projectId, setProjectId] = useState(params.get('project') ?? '');
   const scans = useApiQuery(
     () =>

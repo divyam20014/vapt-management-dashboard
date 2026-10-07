@@ -12,18 +12,27 @@ from app.database.base import Base
 logger = logging.getLogger(__name__)
 
 
-def _enable_sqlite_foreign_keys(dbapi_connection, _connection_record) -> None:
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
+def _sqlite_pragmas(wal: bool):
+    def on_connect(dbapi_connection, _connection_record) -> None:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        if wal:
+            mode = cursor.execute("PRAGMA journal_mode=WAL").fetchone()
+            if mode and str(mode[0]).lower() != "wal":
+                logger.warning("SQLite WAL mode is not available here (journal_mode=%s); continuing without it", mode[0])
+        cursor.close()
+
+    return on_connect
 
 
 def create_db_engine(settings: Settings) -> Engine:
     url = settings.resolved_database_url
     is_sqlite = url.startswith("sqlite")
-    engine = create_engine(url, connect_args={"check_same_thread": False} if is_sqlite else {})
+    # `timeout` is SQLite's busy timeout: a request waits for another writer instead of failing at once.
+    connect_args = {"check_same_thread": False, "timeout": settings.sqlite_busy_timeout_seconds} if is_sqlite else {}
+    engine = create_engine(url, connect_args=connect_args)
     if is_sqlite:
-        event.listen(engine, "connect", _enable_sqlite_foreign_keys)
+        event.listen(engine, "connect", _sqlite_pragmas(settings.sqlite_wal and settings.sqlite_path is not None))
     return engine
 
 
@@ -45,6 +54,10 @@ def init_db(engine: Engine, settings: Settings) -> None:
     from app.database.migrations import upgrade
 
     upgrade(engine)
+    from app.services.remediation_service import sync_builtin_library
+
+    with Session(engine) as db:
+        sync_builtin_library(db)
     logger.info("Database initialised (%d tables)", len(Base.metadata.tables))
 
 

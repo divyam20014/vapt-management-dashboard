@@ -50,8 +50,9 @@ export const SCAN_STATUSES = ['Completed', 'Failed'] as const;
 export type ScanStatus = (typeof SCAN_STATUSES)[number];
 
 export const SUPPORTED_REPORTS = [
-  { scanner: 'OWASP ZAP', formats: 'HTML, JSON, XML' },
+  { scanner: 'OWASP ZAP', formats: 'HTML, JSON, XML, PDF' },
   { scanner: 'Nuclei', formats: 'JSON, JSONL, TXT' },
+  { scanner: 'Findings table', formats: 'CSV, XLSX, JSON, or a table inside a PDF (columns are matched by name)' },
 ] as const;
 
 export const FINDING_STATUSES = ['Open', 'In Progress', 'Resolved', 'Reopened', 'Accepted Risk', 'False Positive', 'Closed'] as const;
@@ -74,13 +75,37 @@ export const CRITICAL_HIGH: readonly Severity[] = ['Critical', 'High'];
 export const USER_ROLES = ['Admin', 'Security Analyst', 'Viewer'] as const;
 export type UserRole = (typeof USER_ROLES)[number];
 
+/** Mirrors backend/app/core/permissions.py. The signed-in user's list comes from GET /api/auth/me. */
+export const PERMISSIONS = {
+  read: 'read',
+  export: 'export',
+  projectsWrite: 'projects.write',
+  projectsDelete: 'projects.delete',
+  recordsDelete: 'records.delete',
+  reportsUpload: 'reports.upload',
+  findingsUpdate: 'findings.update',
+  duplicatesDecide: 'duplicates.decide',
+  usersManage: 'users.manage',
+  auditRead: 'audit.read',
+} as const;
+export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
+
+/** Potential-duplicate decisions (backend DuplicateDecision). Merging is not offered yet. */
+export const DUPLICATE_DECISIONS = { pending: 'Pending', keptSeparate: 'Kept Separate' } as const;
+
+/** Minimum password length, as enforced by the server. */
+export const PASSWORD_MIN_LENGTH = 12;
+
 /** Shown for report fields the scanner did not provide. */
 export const NOT_PROVIDED = 'Not Provided';
+
+/** Shown for fields a document layout should contain but that could not be read (e.g. from a PDF). */
+export const NOT_EXTRACTED = 'Not Extracted';
 
 /** Statuses that still need remediation work. */
 export const ACTIVE_FINDING_STATUSES: readonly FindingStatus[] = ['Open', 'In Progress', 'Reopened'];
 
-export const SCANNERS = ['OWASP ZAP', 'Nuclei'] as const;
+export const SCANNERS = ['OWASP ZAP', 'Nuclei', 'Imported report'] as const;
 
 export const CLASSIFICATIONS = ['New', 'Reopened', 'Resolved', 'Persistent'] as const;
 export const CLASSIFICATION_STYLES: Record<(typeof CLASSIFICATIONS)[number], { badge: string; help: string }> = {

@@ -68,6 +68,8 @@ def register_exception_handlers(app: FastAPI) -> None:
             return error_response(404, "not_found", "The requested resource was not found.")
         if exc.status_code == 405:
             return error_response(405, "method_not_allowed", "This method is not allowed for this resource.")
+        if exc.status_code == 413:
+            return error_response(413, "file_too_large", str(exc.detail))
         return error_response(exc.status_code, "http_error", str(exc.detail))
 
     @app.exception_handler(Exception)

@@ -51,20 +51,22 @@ def _last_seen_before(db: Session, base: Scan, finding_ids: set[int]) -> dict[in
     """For each finding, the most recent completed scan before `base` that detected it."""
     if not finding_ids:
         return {}
-    rows = db.execute(
-        select(FindingOccurrence.finding_id, Scan)
-        .join(Scan, FindingOccurrence.scan_id == Scan.id)
-        .where(
-            FindingOccurrence.finding_id.in_(finding_ids),
-            Scan.project_id == base.project_id,
-            Scan.processing_status == ScanStatus.COMPLETED,
-            earlier_than(base),
-        )
-        .order_by(SCAN_TIME.asc(), Scan.id.asc())
-    ).all()
     latest: dict[int, Scan] = {}
-    for finding_id, scan in rows:
-        latest[finding_id] = scan  # ascending order: the last assignment is the most recent
+    ids = sorted(finding_ids)
+    for start in range(0, len(ids), 500):  # SQLite limits the number of bound parameters
+        rows = db.execute(
+            select(FindingOccurrence.finding_id, Scan)
+            .join(Scan, FindingOccurrence.scan_id == Scan.id)
+            .where(
+                FindingOccurrence.finding_id.in_(ids[start : start + 500]),
+                Scan.project_id == base.project_id,
+                Scan.processing_status == ScanStatus.COMPLETED,
+                earlier_than(base),
+            )
+            .order_by(SCAN_TIME.asc(), Scan.id.asc())
+        ).all()
+        for finding_id, scan in rows:
+            latest[finding_id] = scan  # ascending order: the last assignment is the most recent
     return latest
 
 
@@ -186,6 +188,7 @@ def compare_scans(db: Session, base_scan_id: int, compare_scan_id: int, actor: U
     audit_service.record(
         db, actor, AuditAction.SCANS_COMPARED, "scan", current.id,
         {"base_scan_id": base.id, "compare_scan_id": current.id, **counts.model_dump()},
+        project_id=base.project_id,
     )
     db.commit()
     logger.info("Compared scans base=%s current=%s counts=%s", base.id, current.id, counts.model_dump())

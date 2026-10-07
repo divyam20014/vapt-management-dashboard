@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.enums import DuplicateConfidence, DuplicateDecision, FindingStatus, ReportType, Scanner, Severity
 from app.schemas.user import UserRef
@@ -76,6 +76,31 @@ class RelatedDuplicate(BaseModel):
     decision: DuplicateDecision
 
 
+class DuplicateDecisionUpdate(BaseModel):
+    """Merging is not offered yet: a pair can be kept separate, or returned to Pending."""
+
+    decision: DuplicateDecision
+    comment: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("decision")
+    @classmethod
+    def supported(cls, value: DuplicateDecision) -> DuplicateDecision:
+        if value == DuplicateDecision.MERGED:
+            raise ValueError("Merging findings is not supported yet; keep them separate or leave the pair pending")
+        return value
+
+
+class StandardGuidanceRef(BaseModel):
+    """Application guidance linked by an exact rule. Never part of the report's own recommendation."""
+
+    slug: str
+    title: str
+    category: str
+    summary: str
+    match_type: str  # "scanner_rule" or "cwe"
+    basis: str
+
+
 class FindingDetail(FindingListItem):
     scan_id: int
     finding_key: str
@@ -94,6 +119,7 @@ class FindingDetail(FindingListItem):
     occurrences: list[OccurrenceRead]
     status_history: list[StatusHistoryRead]
     potential_duplicates: list[RelatedDuplicate]
+    standard_guidance: list[StandardGuidanceRef]
 
 
 class FindingUpdate(BaseModel):

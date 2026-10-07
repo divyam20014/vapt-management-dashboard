@@ -16,7 +16,8 @@ import { toApiError } from '../services/api';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { DEFAULT_PAGE_SIZE, PROJECT_ENVIRONMENTS, PROJECT_STATUSES, type ProjectEnvironment, type ProjectStatus } from '../utils/constants';
+import { useAuth } from '../hooks/useAuth';
+import { DEFAULT_PAGE_SIZE, PERMISSIONS, PROJECT_ENVIRONMENTS, PROJECT_STATUSES, type ProjectEnvironment, type ProjectStatus } from '../utils/constants';
 import { formatDate } from '../utils/format';
 import { projectPath } from '../utils/routes';
 import type { Project, ProjectSortField } from '../types/project';
@@ -39,7 +40,10 @@ export default function ProjectsPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const debouncedSearch = useDebouncedValue(search.trim());
 
-  const createOpen = searchParams.get('new') === '1';
+  const { can } = useAuth();
+  const canWrite = can(PERMISSIONS.projectsWrite);
+  const canDelete = can(PERMISSIONS.projectsDelete);
+  const createOpen = canWrite && searchParams.get('new') === '1';
   const setCreateOpen = (open: boolean) => {
     const next = new URLSearchParams(searchParams);
     if (open) next.set('new', '1');
@@ -107,9 +111,11 @@ export default function ProjectsPage() {
         title="Projects"
         description="Applications under VAPT management."
         actions={
-          <Button icon={<Plus className="size-4" aria-hidden />} onClick={() => setCreateOpen(true)}>
-            New Project
-          </Button>
+          canWrite && (
+            <Button icon={<Plus className="size-4" aria-hidden />} onClick={() => setCreateOpen(true)}>
+              New Project
+            </Button>
+          )
         }
       />
 
@@ -176,9 +182,11 @@ export default function ProjectsPage() {
               title="No projects yet"
               description="Create your first project to start managing its VAPT reports."
               action={
-                <Button icon={<Plus className="size-4" aria-hidden />} onClick={() => setCreateOpen(true)}>
-                  New Project
-                </Button>
+                canWrite && (
+                  <Button icon={<Plus className="size-4" aria-hidden />} onClick={() => setCreateOpen(true)}>
+                    New Project
+                  </Button>
+                )
               }
             />
           )
@@ -216,25 +224,29 @@ export default function ProjectsPage() {
                       <td className="px-5 py-3 whitespace-nowrap text-slate-600">{formatDate(project.created_at)}</td>
                       <td className="px-5 py-3 whitespace-nowrap text-slate-600">{formatDate(project.updated_at)}</td>
                       <td className="px-5 py-3 text-right whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => setEditing(project)}
-                          className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
-                          aria-label={`Edit ${project.name}`}
-                        >
-                          <Pencil className="size-4" aria-hidden />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setDeleteError(null);
-                            setDeleting(project);
-                          }}
-                          className="rounded-md p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
-                          aria-label={`Delete ${project.name}`}
-                        >
-                          <Trash className="size-4" aria-hidden />
-                        </button>
+                        {canWrite && (
+                          <button
+                            type="button"
+                            onClick={() => setEditing(project)}
+                            className="rounded-md p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+                            aria-label={`Edit ${project.name}`}
+                          >
+                            <Pencil className="size-4" aria-hidden />
+                          </button>
+                        )}
+                        {canDelete && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDeleteError(null);
+                              setDeleting(project);
+                            }}
+                            className="rounded-md p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600"
+                            aria-label={`Delete ${project.name}`}
+                          >
+                            <Trash className="size-4" aria-hidden />
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

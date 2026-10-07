@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_acting_user
+from app.api.deps import require
+from app.core.permissions import Permission
 from app.database import get_db
 from app.models import ProjectEnvironment, ProjectStatus, User
 from app.schemas.common import Page
@@ -37,7 +38,7 @@ def list_projects(
 
 
 @router.post("", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
-def create_project(data: ProjectCreate, db: Session = Depends(get_db), actor: User | None = Depends(get_acting_user)):
+def create_project(data: ProjectCreate, db: Session = Depends(get_db), actor: User = Depends(require(Permission.PROJECTS_WRITE))):
     return project_service.create_project(db, data, actor)
 
 
@@ -48,12 +49,14 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{project_id}", response_model=ProjectRead)
 def update_project(
-    project_id: int, data: ProjectUpdate, db: Session = Depends(get_db), actor: User | None = Depends(get_acting_user)
+    project_id: int, data: ProjectUpdate, db: Session = Depends(get_db), actor: User = Depends(require(Permission.PROJECTS_WRITE))
 ):
     return project_service.update_project(db, project_id, data, actor)
 
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_project(project_id: int, db: Session = Depends(get_db), actor: User | None = Depends(get_acting_user)) -> Response:
+def delete_project(
+    project_id: int, db: Session = Depends(get_db), actor: User = Depends(require(Permission.PROJECTS_DELETE))
+) -> Response:
     project_service.delete_project(db, project_id, actor)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

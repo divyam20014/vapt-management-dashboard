@@ -17,13 +17,12 @@ interface BulkUpdateDialogProps {
   open: boolean;
   findingIds: number[];
   users: User[];
-  actingUser: User | null;
   onClose: () => void;
   onDone: (result: BulkUpdateResult) => void;
 }
 
 /** One transactional request: every selected finding is updated, or none is. */
-export default function BulkUpdateDialog({ open, findingIds, users, actingUser, onClose, onDone }: BulkUpdateDialogProps) {
+export default function BulkUpdateDialog({ open, findingIds, users, onClose, onDone }: BulkUpdateDialogProps) {
   const [status, setStatus] = useState<string>(KEEP);
   const [assignee, setAssignee] = useState<string>(KEEP);
   const [comment, setComment] = useState('');
@@ -69,18 +68,13 @@ export default function BulkUpdateDialog({ open, findingIds, users, actingUser, 
           <Button variant="secondary" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={submit} loading={busy} disabled={nothingChosen || !actingUser}>
+          <Button onClick={submit} loading={busy} disabled={nothingChosen}>
             Update {count} finding{count === 1 ? '' : 's'}
           </Button>
         </>
       }
     >
       <div className="space-y-5">
-        {!actingUser && (
-          <p role="alert" className="rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            Choose who you are acting as (top bar) so the change can be recorded.
-          </p>
-        )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label htmlFor="bulk-status" className="mb-1.5 block text-sm font-medium text-slate-700">

@@ -6,17 +6,22 @@ import UsersCard from '../components/users/UsersCard';
 import { settingsService } from '../services/settingsService';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useAuth } from '../hooks/useAuth';
+import { PERMISSIONS } from '../utils/constants';
 
 export default function SettingsPage() {
   useDocumentTitle('Settings');
   const { data, loading, error, reload } = useApiQuery(() => settingsService.get(), []);
+  const canManageUsers = useAuth().can(PERMISSIONS.usersManage);
 
   return (
     <>
-      <PageHeader title="Settings" description="Users, and the current server configuration." />
-      <div className="mb-6">
-        <UsersCard />
-      </div>
+      <PageHeader title="Settings" description={canManageUsers ? 'Users and roles, and the current server configuration.' : 'The current server configuration.'} />
+      {canManageUsers && (
+        <div className="mb-6">
+          <UsersCard />
+        </div>
+      )}
       <Card title="Application configuration" bodyClassName="">
         {error ? (
           <ErrorState title="Settings could not be loaded" message={error.message} onRetry={reload} />

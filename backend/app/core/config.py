@@ -34,6 +34,16 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     log_level: str = "INFO"
     frontend_dist: str = "./frontend/dist"
+    # Sign-in sessions: ended after this much inactivity, and in any case after the maximum age.
+    session_idle_minutes: int = 480
+    session_max_hours: int = 24
+    # Set to true when the application is served over HTTPS so the session cookie is never sent in clear text.
+    session_cookie_secure: bool = False
+    # SQLite write-ahead logging lets pages keep reading while a large upload is being saved. Turn it
+    # off where the database sits on a file system without shared-memory support (network shares,
+    # Docker Desktop bind mounts). Writers always wait up to `sqlite_busy_timeout_seconds` for a lock.
+    sqlite_wal: bool = True
+    sqlite_busy_timeout_seconds: int = 30
 
     @property
     def cors_origin_list(self) -> list[str]:

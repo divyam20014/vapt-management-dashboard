@@ -2,12 +2,18 @@ import { NavLink } from 'react-router-dom';
 import { ShieldCheck } from 'lucide-react';
 import { NAV_SECTIONS } from './navigation';
 import { ROUTES } from '../../utils/routes';
+import { useAuth } from '../../hooks/useAuth';
 
 interface SidebarProps {
   onNavigate?: () => void;
 }
 
 export default function Sidebar({ onNavigate }: SidebarProps) {
+  const { can } = useAuth();
+  const sections = NAV_SECTIONS.map((section) => ({
+    ...section,
+    items: section.items.filter((item) => !item.permission || can(item.permission)),
+  })).filter((section) => section.items.length > 0);
   return (
     <div className="flex h-full flex-col bg-slate-900 text-slate-300">
       <div className="flex h-16 items-center gap-2.5 border-b border-white/10 px-5">
@@ -21,7 +27,7 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
       </div>
 
       <nav className="flex-1 space-y-6 overflow-y-auto px-3 py-5" aria-label="Main navigation">
-        {NAV_SECTIONS.map((section, index) => (
+        {sections.map((section, index) => (
           <div key={section.heading ?? index}>
             {section.heading && (
               <p className="mb-2 px-3 text-[11px] font-semibold tracking-wider text-slate-500 uppercase">{section.heading}</p>

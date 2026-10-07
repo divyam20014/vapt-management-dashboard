@@ -4,13 +4,14 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, 
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_acting_user
+from app.api.deps import current_user, require
+from app.core.permissions import Permission
 from app.database import get_db
 from app.models import Scanner, ScanStatus, User
 from app.schemas.common import Page
 from app.schemas.comparison import ComparisonResult
-from app.schemas.scan import ScanDetail, ScanRead, UploadResult
-from app.services import comparison_service, scan_history_service, scan_service
+from app.schemas.scan import BulkUploadResult, ScanDetail, ScanRead, UploadResult
+from app.services import comparison_service, deletion_service, scan_history_service, scan_service
 from app.services.scan_history_service import ScanFilters, ScanSortField, SortOrder
 
 router = APIRouter(tags=["scans"])
@@ -25,7 +26,7 @@ def upload_report(
     scan_date: date | None = Form(None, description="Used only when the report itself has no scan date."),
     allow_duplicate: bool = Form(False, description="Process the file even if identical bytes were uploaded before."),
     db: Session = Depends(get_db),
-    actor: User | None = Depends(get_acting_user),
+    actor: User = Depends(require(Permission.REPORTS_UPLOAD)),
 ):
     provided = datetime.combine(scan_date, time.min, tzinfo=timezone.utc) if scan_date else None
     return scan_service.process_upload(
@@ -38,6 +39,26 @@ def upload_report(
         scan_name=scan_name,
         provided_scan_date=provided,
         allow_duplicate=allow_duplicate,
+        actor=actor,
+    )
+
+
+@router.post("/scans/upload-bulk", response_model=BulkUploadResult)
+def upload_reports_bulk(
+    request: Request,
+    project_id: int = Form(..., gt=0),
+    files: list[UploadFile] = File(..., description=f"Up to {scan_service.MAX_BULK_FILES} report files."),
+    allow_duplicates: bool = Form(False, description="Process files even if identical bytes were uploaded before."),
+    db: Session = Depends(get_db),
+    actor: User = Depends(require(Permission.REPORTS_UPLOAD)),
+):
+    """Each file is validated and processed independently through the single-upload pipeline."""
+    return scan_service.process_bulk_upload(
+        db,
+        request.app.state.settings,
+        project_id=project_id,
+        files=[(f.filename, f.content_type, f.file) for f in files],
+        allow_duplicates=allow_duplicates,
         actor=actor,
     )
 
@@ -65,7 +86,7 @@ def compare_scans(
     base_scan_id: int = Query(..., description="Baseline (previous) scan."),
     compare_scan_id: int = Query(..., description="Current scan."),
     db: Session = Depends(get_db),
-    actor: User | None = Depends(get_acting_user),
+    actor: User = Depends(current_user),
 ):
     return comparison_service.compare_scans(db, base_scan_id, compare_scan_id, actor)
 
@@ -84,6 +105,12 @@ def list_project_scans(
 @router.get("/scans/{scan_id}", response_model=ScanDetail)
 def get_scan(scan_id: int, db: Session = Depends(get_db)):
     return scan_history_service.get_scan_detail(db, scan_id)
+
+
+@router.delete("/scans/{scan_id}")
+def delete_scan(scan_id: int, request: Request, db: Session = Depends(get_db), actor: User = Depends(require(Permission.RECORDS_DELETE))):
+    """Admin only. Removes the scan, its observations, findings no other scan observed, and the original file."""
+    return deletion_service.delete_scan(db, request.app.state.settings, scan_id, actor)
 
 
 @router.get("/scans/{scan_id}/original", response_class=FileResponse)

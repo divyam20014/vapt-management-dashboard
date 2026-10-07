@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import DeleteRecordButton from '../components/auth/DeleteRecordButton';
 import { ArrowLeft, ChevronLeft, ChevronRight, Download, GitCompare } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
@@ -18,6 +19,7 @@ import { ROUTES, comparePath, projectPath, scanPath } from '../utils/routes';
 
 export default function ScanDetailPage() {
   const id = Number(useParams().scanId);
+  const navigate = useNavigate();
   const { data: scan, error, reload } = useApiQuery(() => scanService.get(id), [id]);
   useDocumentTitle(scan?.scan_name ?? 'Scan');
 
@@ -73,6 +75,19 @@ export default function ScanDetailPage() {
                 Compare with previous scan
               </Link>
             )}
+            <DeleteRecordButton
+              label="Delete scan"
+              title="Delete scan"
+              message={
+                <>
+                  <strong>{scan.scan_name}</strong> and its original file ({scan.original_filename}) will be deleted. Findings that no other
+                  scan observed are removed; findings also seen in other scans are kept with their status and history, and their detection
+                  dates are recalculated. This cannot be undone and is recorded in the audit log.
+                </>
+              }
+              onDelete={() => scanService.remove(scan.id)}
+              onDeleted={() => navigate(projectPath(scan.project_id))}
+            />
           </>
         }
       />

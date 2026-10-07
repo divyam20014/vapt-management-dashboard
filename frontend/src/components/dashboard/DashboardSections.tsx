@@ -9,18 +9,25 @@ import SeverityBarChart from '../charts/SeverityBarChart';
 import TrendChart from '../charts/TrendChart';
 import { SeverityBadge, FindingStatusBadge } from '../findings/Badges';
 import { useApiQuery } from '../../hooks/useApiQuery';
+import { useAuth } from '../../hooks/useAuth';
 import { dashboardService } from '../../services/dashboardService';
-import { SEVERITIES, SEVERITY_COUNT_KEYS, SEVERITY_STYLES } from '../../utils/constants';
+import { PERMISSIONS, SEVERITIES, SEVERITY_COUNT_KEYS, SEVERITY_STYLES } from '../../utils/constants';
 import { formatDate, formatNumber } from '../../utils/format';
 import { ROUTES, findingPath } from '../../utils/routes';
 import type { DashboardSummary } from '../../types/dashboard';
 
-export const uploadAction = (projectId?: number) => (
-  <Link to={projectId ? `${ROUTES.upload}?project=${projectId}` : ROUTES.upload} className={buttonClasses('primary')}>
-    <Upload className="size-4" aria-hidden />
-    Upload VAPT Report
-  </Link>
-);
+function UploadAction({ projectId }: { projectId?: number }) {
+  if (!useAuth().can(PERMISSIONS.reportsUpload)) return null;
+  return (
+    <Link to={projectId ? `${ROUTES.upload}?project=${projectId}` : ROUTES.upload} className={buttonClasses('primary')}>
+      <Upload className="size-4" aria-hidden />
+      Upload VAPT Report
+    </Link>
+  );
+}
+
+/** The upload button for empty states; nothing for roles that cannot upload. */
+export const uploadAction = (projectId?: number) => <UploadAction projectId={projectId} />;
 
 /** Five severity cards; each links to the filtered findings list. */
 export function SeverityCards({ summary, projectId }: { summary: DashboardSummary; projectId?: number }) {

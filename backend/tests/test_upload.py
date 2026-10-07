@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.main import create_app
+from tests.conftest import admin_session
 from tests.fixtures import (
     NUCLEI_JSONL,
     NUCLEI_RESULTS,
@@ -178,7 +179,7 @@ def test_same_report_in_another_project_is_not_a_duplicate(client, project, make
     "name, content, content_type, status, code",
     [
         ("malware.exe", b"MZ\x90\x00", "application/octet-stream", 415, "unsupported_media_type"),
-        ("report.pdf", b"%PDF-1.7", "application/pdf", 415, "unsupported_media_type"),
+        ("report.docx", b"PK", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", 415, "unsupported_media_type"),
         ("report", b"{}", "application/json", 415, "unsupported_media_type"),
         ("report.json", b"MZ\x90\x00binary", "application/json", 415, "unsupported_media_type"),
         ("report.json", b'{"a": 1}', "application/pdf", 415, "unsupported_media_type"),
@@ -201,7 +202,7 @@ def test_invalid_uploads_are_rejected_and_not_stored(client, project, sqlite_row
 
 def test_oversized_upload_is_rejected(settings, tmp_path):
     settings.max_upload_size_mb = 1
-    with TestClient(create_app(settings)) as client:
+    with admin_session(create_app(settings)) as client:
         project_id = client.post("/api/projects", json={"name": "P"}).json()["id"]
         response = upload(client, project_id, name="big.json", content=b"[" + b" " * (1024 * 1024) + b"]")
     assert response.status_code == 413
@@ -320,7 +321,9 @@ def test_project_with_reports_cannot_be_deleted(client, project, sqlite_rows):
 
 
 def test_settings_lists_allowed_extensions(client):
-    assert client.get("/api/settings").json()["allowed_extensions"] == [".html", ".htm", ".json", ".jsonl", ".xml", ".txt"]
+    assert client.get("/api/settings").json()["allowed_extensions"] == [
+        ".html", ".htm", ".json", ".jsonl", ".xml", ".txt", ".csv", ".xlsx", ".pdf"
+    ]
 
 
 def test_truncated_zap_html_upload_is_recorded_as_failed(client, project, sqlite_rows, settings):

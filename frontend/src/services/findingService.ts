@@ -42,6 +42,16 @@ export const findingService = {
     return data;
   },
 
+  async decideDuplicate(findingId: number, pairId: number, decision: string, comment?: string): Promise<FindingDetail> {
+    const { data } = await api.put<FindingDetail>(`/findings/${findingId}/duplicates/${pairId}`, { decision, comment });
+    return data;
+  },
+
+  /** Admin only. */
+  async remove(id: number): Promise<void> {
+    await api.delete(`/findings/${id}`);
+  },
+
   async facets(): Promise<FindingFacets> {
     const { data } = await api.get<FindingFacets>('/findings/facets');
     return data;

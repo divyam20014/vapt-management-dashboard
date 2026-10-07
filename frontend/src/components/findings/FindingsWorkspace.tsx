@@ -1,6 +1,7 @@
+import { listProjectOptions } from '../../services/projectOptions';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CircleCheck, ListChecks, ShieldCheck, Upload, X } from 'lucide-react';
+import { BookOpen, CircleCheck, ListChecks, ShieldCheck, Upload, X } from 'lucide-react';
 import Card from '../ui/Card';
 import Button, { buttonClasses } from '../ui/Button';
 import Pagination from '../ui/Pagination';
@@ -10,13 +11,15 @@ import ErrorState from '../states/ErrorState';
 import FindingFilters from './FindingFilters';
 import FindingsTable from './FindingsTable';
 import BulkUpdateDialog from './BulkUpdateDialog';
+import ExportMenu from '../exports/ExportMenu';
 import { findingService } from '../../services/findingService';
-import { projectService } from '../../services/projectService';
 import { useApiQuery } from '../../hooks/useApiQuery';
-import { useActingUser } from '../../hooks/useActingUser';
+import { useUsers } from '../../hooks/useUsers';
+import { useAuth } from '../../hooks/useAuth';
 import { useFindingQuery } from '../../hooks/useFindingQuery';
-import { FINDING_PAGE_SIZES, MAX_BULK_FINDINGS } from '../../utils/constants';
-import { ROUTES } from '../../utils/routes';
+import { FINDING_PAGE_SIZES, MAX_BULK_FINDINGS, PERMISSIONS } from '../../utils/constants';
+import { ROUTES, guidelinePath } from '../../utils/routes';
+import { remediationService } from '../../services/remediationService';
 import type { BulkUpdateResult } from '../../types/finding';
 
 interface FindingsWorkspaceProps {
@@ -30,11 +33,16 @@ interface FindingsWorkspaceProps {
 export default function FindingsWorkspace({ lockedSeverities, scanId, emptyTitle = 'No findings available' }: FindingsWorkspaceProps) {
   const findingQuery = useFindingQuery(lockedSeverities, scanId);
   const { query, filters, sortBy, sortOrder, setSort, setPage, setPageSize, pageSize, activeFilterCount } = findingQuery;
-  const { users, activeUsers, actingUser } = useActingUser();
+  const { users, activeUsers } = useUsers();
+  const canUpdate = useAuth().can(PERMISSIONS.findingsUpdate);
 
   const list = useApiQuery(() => findingService.list(query), [JSON.stringify(query)]);
-  const projects = useApiQuery(() => projectService.list({ page_size: 100, sort_by: 'name', sort_order: 'asc' }), []);
+  const projects = useApiQuery(() => listProjectOptions(), []);
   const facets = useApiQuery(() => findingService.facets(), []);
+  const guideline = useApiQuery(
+    () => (filters.remediation ? remediationService.get(filters.remediation) : Promise.resolve(null)),
+    [filters.remediation],
+  );
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
@@ -88,6 +96,31 @@ export default function FindingsWorkspace({ lockedSeverities, scanId, emptyTitle
           severityOptions={lockedSeverities}
         />
 
+        {(filters.remediation || (data && data.total > 0)) && (
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-4 py-2">
+            {filters.remediation ? (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-800 ring-1 ring-teal-600/20">
+                <BookOpen className="size-3.5" aria-hidden />
+                Standard guidance:{' '}
+                <Link to={guidelinePath(filters.remediation)} className="underline hover:text-teal-950">
+                  {guideline.data?.title ?? filters.remediation}
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => findingQuery.setFilter('remediation', '')}
+                  aria-label="Remove standard guidance filter"
+                  className="rounded-full p-0.5 hover:bg-teal-100"
+                >
+                  <X className="size-3" aria-hidden />
+                </button>
+              </span>
+            ) : (
+              <span />
+            )}
+            {data && data.total > 0 && <ExportMenu query={query} total={data.total} />}
+          </div>
+        )}
+
         {selectedIds.length > 0 && (
           <div className="flex flex-wrap items-center gap-3 border-b border-teal-100 bg-teal-50 px-4 py-2.5 text-sm" role="region" aria-label="Bulk actions">
             <span className="font-medium text-teal-900">
@@ -133,6 +166,7 @@ export default function FindingsWorkspace({ lockedSeverities, scanId, emptyTitle
               onSort={setSort}
               showProject={filters.projects.length !== 1}
               busy={list.loading}
+              selectable={canUpdate}
             />
             <div className="flex flex-col items-stretch sm:flex-row sm:items-center">
               <div className="flex-1">
@@ -161,7 +195,6 @@ export default function FindingsWorkspace({ lockedSeverities, scanId, emptyTitle
         open={bulkOpen}
         findingIds={selectedIds}
         users={activeUsers}
-        actingUser={actingUser}
         onClose={() => setBulkOpen(false)}
         onDone={(result) => {
           setBulkOpen(false);

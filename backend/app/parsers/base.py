@@ -12,7 +12,7 @@ from functools import cached_property
 from typing import Any
 
 from app.core.errors import AppError
-from app.models.enums import ReportType, Scanner, Severity
+from app.models.enums import FindingStatus, ReportType, Scanner, Severity
 
 
 class ReportParseError(AppError):
@@ -83,6 +83,8 @@ class NormalizedFinding:
     source_metadata: dict[str, Any] = field(default_factory=dict)
     # False when the method is inferred (not a reported field), so it must not affect identity.
     method_in_identity: bool = True
+    # Workflow status stated in the report (tabular imports); applied only when the finding is new.
+    initial_status: FindingStatus | None = None
 
     @property
     def identity_method(self) -> str | None:

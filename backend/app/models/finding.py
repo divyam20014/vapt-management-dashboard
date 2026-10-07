@@ -71,6 +71,7 @@ class Finding(Base):
         Index("ix_findings_endpoint", "project_id", "endpoint"),
         Index("ix_findings_assigned_to", "assigned_to"),
         Index("ix_findings_last_detected", "last_detected"),
+        Index("ix_findings_first_detected", "first_detected"),
     )
 
 

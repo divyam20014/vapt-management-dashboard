@@ -2,9 +2,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.security import PASSWORD_MAX_LENGTH
 from app.models.enums import UserRole
 
-_EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 
 
 def _strip(value):
@@ -13,8 +14,10 @@ def _strip(value):
 
 class UserCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    email: str = Field(max_length=320, pattern=_EMAIL_PATTERN)
+    email: str = Field(max_length=320, pattern=EMAIL_PATTERN)
     role: UserRole = UserRole.SECURITY_ANALYST
+    # Optional: without a password the user can be assigned findings but cannot sign in yet.
+    password: str | None = Field(default=None, max_length=PASSWORD_MAX_LENGTH)
 
     @field_validator("name", "email", mode="before")
     @classmethod
@@ -29,7 +32,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
-    email: str | None = Field(default=None, max_length=320, pattern=_EMAIL_PATTERN)
+    email: str | None = Field(default=None, max_length=320, pattern=EMAIL_PATTERN)
     role: UserRole | None = None
     active: bool | None = None
 
@@ -60,6 +63,8 @@ class UserRead(BaseModel):
     role: UserRole
     active: bool
     created_at: datetime
+    can_sign_in: bool
+    last_login_at: datetime | None
 
 
 class UserRef(BaseModel):

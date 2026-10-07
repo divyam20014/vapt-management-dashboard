@@ -228,10 +228,12 @@ def get_trends(db: Session, project_id: int | None = None) -> Trends:
     first, last = days[0], days[-1]
     monthly = (last - first).days + 1 > MAX_DAILY_POINTS
     totals: dict[str, list[int]] = {}
-    cursor = first
-    while cursor <= last:  # include empty periods so the time axis is continuous
+    # Include empty periods so the time axis is continuous. Monthly data steps a month at a time,
+    # so a far-off report date costs one iteration per month rather than per day.
+    cursor = first.replace(day=1) if monthly else first
+    while cursor <= last:
         totals.setdefault(_bucket(cursor, monthly), [0, 0])
-        cursor += timedelta(days=1)
+        cursor = (cursor.replace(day=28) + timedelta(days=4)).replace(day=1) if monthly else cursor + timedelta(days=1)
     for day, count in discovered.items():
         totals[_bucket(day, monthly)][0] += count
     for day, count in resolved.items():

@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Copy, FileCode } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
@@ -7,20 +7,30 @@ import Modal from '../components/ui/Modal';
 import LoadingState from '../components/states/LoadingState';
 import ErrorState from '../components/states/ErrorState';
 import FindingWorkflow from '../components/findings/FindingWorkflow';
+import PossibleDuplicates from '../components/findings/PossibleDuplicates';
+import StandardGuidanceCard from '../components/remediation/StandardGuidanceCard';
+import DeleteRecordButton from '../components/auth/DeleteRecordButton';
 import { FindingStatusBadge, SeverityBadge } from '../components/findings/Badges';
 import { findingService } from '../services/findingService';
 import { toApiError } from '../services/api';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { NOT_PROVIDED, UNCLASSIFIED_LABEL } from '../utils/constants';
+import { NOT_EXTRACTED, NOT_PROVIDED, UNCLASSIFIED_LABEL } from '../utils/constants';
 import { formatDateTime } from '../utils/format';
-import { ROUTES, findingPath, projectPath } from '../utils/routes';
+import { ROUTES, projectPath } from '../utils/routes';
 import type { FindingDetail, OccurrenceRaw } from '../types/finding';
 
 const missing = <span className="text-slate-400 italic">{NOT_PROVIDED}</span>;
+const unextracted = (
+  <span className="text-amber-700 italic" title="The report layout should contain this value, but it could not be read reliably.">
+    {NOT_EXTRACTED}
+  </span>
+);
 
-function show(value: ReactNode | null | undefined) {
-  return value === null || value === undefined || value === '' ? missing : value;
+/** `unreadable`: the report layout should contain the value but it could not be read (e.g. from a PDF). */
+function show(value: ReactNode | null | undefined, unreadable = false) {
+  if (value !== null && value !== undefined && value !== '') return value;
+  return unreadable ? unextracted : missing;
 }
 
 function Field({ label, children, mono = false }: { label: string; children: ReactNode; mono?: boolean }) {
@@ -32,18 +42,18 @@ function Field({ label, children, mono = false }: { label: string; children: Rea
   );
 }
 
-function TextBlock({ title, text, note }: { title: string; text: string | null; note?: string }) {
+function TextBlock({ title, text, note, unreadable }: { title: string; text: string | null; note?: string; unreadable?: boolean }) {
   return (
     <section>
       <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
       {note && <p className="text-xs text-slate-500">{note}</p>}
-      <div className="mt-1 text-sm whitespace-pre-wrap text-slate-700">{show(text)}</div>
+      <div className="mt-1 text-sm whitespace-pre-wrap text-slate-700">{show(text, unreadable)}</div>
     </section>
   );
 }
 
 /** Verbatim scanner output (evidence, commands). Rendered as text, never as HTML. */
-function Verbatim({ title, text, note }: { title: string; text: string | null; note?: string }) {
+function Verbatim({ title, text, note, unreadable }: { title: string; text: string | null; note?: string; unreadable?: boolean }) {
   return (
     <section>
       <div className="flex items-center justify-between gap-2">
@@ -64,14 +74,14 @@ function Verbatim({ title, text, note }: { title: string; text: string | null; n
       {text ? (
         <pre className="mt-1 max-h-72 overflow-auto rounded-md bg-slate-900 p-3 font-mono text-xs whitespace-pre-wrap text-slate-100">{text}</pre>
       ) : (
-        <p className="mt-1 text-sm">{missing}</p>
+        <p className="mt-1 text-sm">{unreadable ? unextracted : missing}</p>
       )}
     </section>
   );
 }
 
-function References({ text }: { text: string | null }) {
-  if (!text) return <p className="mt-1 text-sm">{missing}</p>;
+function References({ text, unreadable }: { text: string | null; unreadable?: boolean }) {
+  if (!text) return <p className="mt-1 text-sm">{unreadable ? unextracted : missing}</p>;
   return (
     <ul className="mt-1 space-y-1 text-sm">
       {text.split('\n').map((line, index) => (
@@ -93,6 +103,7 @@ export default function FindingDetailPage() {
   const { findingId } = useParams();
   const id = Number(findingId);
   const location = useLocation();
+  const navigate = useNavigate();
   const backTo = (location.state as { from?: string } | null)?.from ?? ROUTES.findings;
   const { data, error, reload } = useApiQuery(() => findingService.get(id), [id]);
   const [current, setCurrent] = useState<FindingDetail | null>(null);
@@ -140,7 +151,9 @@ export default function FindingDetailPage() {
     }
   };
 
-  const metadata = Object.entries(finding.source_metadata ?? {});
+  const metadata = Object.entries(finding.source_metadata ?? {}).filter(([key]) => key !== 'not_extracted');
+  const notExtracted = Array.isArray(finding.source_metadata?.not_extracted) ? (finding.source_metadata!.not_extracted as string[]) : [];
+  const unreadable = (field: string) => notExtracted.includes(field);
 
   return (
     <>
@@ -149,9 +162,21 @@ export default function FindingDetailPage() {
         title={finding.normalized_title}
         description={`${finding.project_name} · ${finding.source_tool}`}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <SeverityBadge severity={finding.normalized_severity} original={finding.original_severity} />
             <FindingStatusBadge status={finding.status} />
+            <DeleteRecordButton
+              label="Delete finding"
+              title="Delete finding"
+              message={
+                <>
+                  <strong>{finding.normalized_title}</strong> will be removed with its {finding.occurrences.length} observation(s), status
+                  history and duplicate suggestions. The uploaded reports are not changed. This cannot be undone and is recorded in the audit log.
+                </>
+              }
+              onDelete={() => findingService.remove(finding.id)}
+              onDeleted={() => navigate(backTo)}
+            />
           </div>
         }
       />
@@ -186,23 +211,23 @@ export default function FindingDetailPage() {
 
           <Card title="Location">
             <dl className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <Field label="Affected URL" mono>{show(finding.affected_url)}</Field>
-              <Field label="Endpoint" mono>{show(finding.endpoint)}</Field>
-              <Field label="HTTP method">{show(finding.http_method)}</Field>
-              <Field label="Parameter" mono>{show(finding.parameter)}</Field>
+              <Field label="Affected URL" mono>{show(finding.affected_url, unreadable('affected_url'))}</Field>
+              <Field label="Endpoint" mono>{show(finding.endpoint, unreadable('endpoint'))}</Field>
+              <Field label="HTTP method">{show(finding.http_method, unreadable('http_method'))}</Field>
+              <Field label="Parameter" mono>{show(finding.parameter, unreadable('parameter'))}</Field>
             </dl>
           </Card>
 
           <Card title="Details">
             <div className="space-y-5">
-              <TextBlock title="Description" text={finding.description} />
-              <TextBlock title="Impact" text={finding.impact} />
-              <Verbatim title="Evidence" text={finding.evidence} note="Exactly as reported when the finding was first detected." />
+              <TextBlock title="Description" text={finding.description} unreadable={unreadable('description')} />
+              <TextBlock title="Impact" text={finding.impact} unreadable={unreadable('impact')} />
+              <Verbatim title="Evidence" text={finding.evidence} note="Exactly as reported when the finding was first detected." unreadable={unreadable('evidence')} />
               <Verbatim title="Steps to reproduce" text={finding.steps_to_reproduce} />
-              <TextBlock title="Original recommendation" text={finding.recommendation} note="From the scanner report." />
+              <TextBlock title="Original recommendation" text={finding.recommendation} note="From the scanner report." unreadable={unreadable('recommendation')} />
               <section>
                 <h3 className="text-sm font-semibold text-slate-900">References</h3>
-                <References text={finding.source_reference} />
+                <References text={finding.source_reference} unreadable={unreadable('source_reference')} />
               </section>
             </div>
           </Card>
@@ -253,15 +278,16 @@ export default function FindingDetailPage() {
 
         <div className="space-y-6">
           <FindingWorkflow finding={finding} onSaved={setCurrent} />
+          <StandardGuidanceCard guidance={finding.standard_guidance ?? []} />
 
           <Card title="Classification">
             <dl className="space-y-3">
-              <Field label="CWE">{show(finding.cwe)}</Field>
+              <Field label="CWE">{show(finding.cwe, unreadable('cwe'))}</Field>
               <Field label="OWASP">{show(finding.owasp)}</Field>
               <Field label="CVSS score">{show(finding.cvss_score)}</Field>
               <Field label="Category">{show(finding.category)}</Field>
               <Field label="Source">{finding.source_tool}</Field>
-              <Field label="Template / plugin" mono>{show(finding.source_template)}</Field>
+              <Field label="Template / plugin" mono>{show(finding.source_template, unreadable('source_template'))}</Field>
               {metadata.map(([key, value]) => (
                 <Field key={key} label={key.replace(/_/g, ' ')}>
                   {Array.isArray(value) ? value.join(', ') : String(value)}
@@ -299,23 +325,7 @@ export default function FindingDetailPage() {
             </ol>
           </Card>
 
-          {finding.potential_duplicates.length > 0 && (
-            <Card title="Possible duplicates" description="Suggested by the application; not merged.">
-              <ul className="space-y-3">
-                {finding.potential_duplicates.map((d) => (
-                  <li key={d.id} className="text-sm">
-                    <Link to={findingPath(d.other_finding_id)} className="font-medium text-teal-700 hover:text-teal-800">
-                      {d.other_title}
-                    </Link>
-                    <p className="text-xs text-slate-500">
-                      {d.other_source} · {d.confidence} confidence · {d.decision}
-                    </p>
-                    <p className="text-xs text-slate-600">{d.reason}</p>
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
+          <PossibleDuplicates finding={finding} onSaved={setCurrent} />
         </div>
       </div>
 

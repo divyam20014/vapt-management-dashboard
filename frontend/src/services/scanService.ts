@@ -31,6 +31,12 @@ export const scanService = {
     return data;
   },
 
+  /** Admin only. Also removes findings no other scan observed, and the original file. */
+  async remove(id: number): Promise<{ findings_removed: number; findings_kept: number }> {
+    const { data } = await api.delete<{ findings_removed: number; findings_kept: number }>(`/scans/${id}`);
+    return data;
+  },
+
   async get(id: number): Promise<ScanDetail> {
     const { data } = await api.get<ScanDetail>(`/scans/${id}`);
     return data;

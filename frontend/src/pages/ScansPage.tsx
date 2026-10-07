@@ -1,3 +1,4 @@
+import { listProjectOptions } from '../services/projectOptions';
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowDown, ArrowUp, GitCompare, ScanLine } from 'lucide-react';
@@ -13,7 +14,6 @@ import ScanStatusBadge from '../components/scans/ScanStatusBadge';
 import SeverityBreakdown from '../components/scans/SeverityBreakdown';
 import { uploadAction } from '../components/dashboard/DashboardSections';
 import { scanService } from '../services/scanService';
-import { projectService } from '../services/projectService';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { SCANNERS, SCAN_STATUSES } from '../utils/constants';
@@ -44,7 +44,7 @@ export default function ScansPage() {
     sort_order: sortOrder,
   };
   const list = useApiQuery(() => scanService.list(query), [JSON.stringify(query)]);
-  const projectList = useApiQuery(() => projectService.list({ page_size: 100, sort_by: 'name', sort_order: 'asc' }), []);
+  const projectList = useApiQuery(() => listProjectOptions(), []);
   const [selected, setSelected] = useState<Scan[]>([]);
 
   useEffect(() => setSelected([]), [params.toString()]);

@@ -140,8 +140,8 @@ def test_an_unchanged_report_is_entirely_persistent(client, make_project):
 
 
 def test_comparison_flags_status_conflicts_without_changing_status(client, history, sqlite_rows):
-    alice = client.post("/api/users", json={"name": "Alice", "email": "alice@example.com"}).json()
-    headers = {"X-Acting-User": str(alice["id"])}
+    alice = client.admin  # the signed-in user records the changes
+    headers = {}
     cross_domain = sqlite_rows("SELECT id FROM findings WHERE source_template = ? LIMIT 1", (CROSS_DOMAIN,))[0][0]
     client.put(f"/api/findings/{cross_domain}", json={"status": "Resolved"}, headers=headers)
 
@@ -239,8 +239,8 @@ def test_original_report_download(client, history, settings, sqlite_rows):
 @pytest.fixture
 def portfolio(client, make_project):
     """Two projects with real reports, one including Critical/High results (test-only severity edits)."""
-    alice = client.post("/api/users", json={"name": "Alice", "email": "alice@example.com"}).json()
-    headers = {"X-Acting-User": str(alice["id"])}
+    alice = client.admin  # the signed-in user records the changes
+    headers = {}
     a = make_project(name="Alpha")
     b = make_project(name="Beta")
     upload(client, a["id"], "zap-jan.json", zap_report({CSP, TIMESTAMP}, "2026-01-10T09:00:00Z"), headers)
@@ -292,7 +292,7 @@ def test_dashboard_totals_match_sqlite(client, portfolio, sqlite_rows):
 
 def test_indicators_follow_workflow_changes(client, portfolio, sqlite_rows):
     critical = sqlite_rows("SELECT id FROM findings WHERE normalized_severity = 'Critical'")[0][0]
-    alice_id = int(portfolio["headers"]["X-Acting-User"])
+    alice_id = client.admin["id"]
     client.put(f"/api/findings/{critical}", json={"status": "Resolved", "assigned_to": alice_id}, headers=portfolio["headers"])
     summary = client.get("/api/dashboard/summary").json()
     assert summary["indicators"]["active_critical_high"] == 2

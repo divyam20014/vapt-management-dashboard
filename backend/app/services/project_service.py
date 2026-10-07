@@ -51,13 +51,15 @@ def list_projects(
 ) -> tuple[list[Project], int]:
     query = select(Project)
     if search:
-        pattern = f"%{search.strip()}%"
+        from app.services.finding_service import contains_pattern
+
+        pattern = contains_pattern(search)
         query = query.where(
             or_(
-                Project.name.ilike(pattern),
-                Project.application_name.ilike(pattern),
-                Project.owner.ilike(pattern),
-                Project.description.ilike(pattern),
+                Project.name.ilike(pattern, escape="\\"),
+                Project.application_name.ilike(pattern, escape="\\"),
+                Project.owner.ilike(pattern, escape="\\"),
+                Project.description.ilike(pattern, escape="\\"),
             )
         )
     if status is not None:

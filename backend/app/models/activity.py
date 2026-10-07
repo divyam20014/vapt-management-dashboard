@@ -25,11 +25,18 @@ class FindingStatusHistory(Base):
 
     changed_by_user: Mapped[User | None] = relationship(lazy="joined")
 
-    __table_args__ = (Index("ix_status_history_finding_id", "finding_id", "changed_at"),)
+    __table_args__ = (
+        Index("ix_status_history_finding_id", "finding_id", "changed_at"),
+        Index("ix_status_history_new_status", "new_status", "changed_at"),  # trends / resolved counts
+    )
 
 
 class AuditLog(Base):
-    """Important actions. Never contains credentials or secrets."""
+    """Important actions. Never contains credentials or secrets.
+
+    `project_id` and `finding_id` are plain integers (not foreign keys) so the trail outlives
+    the records it describes, for example a deleted project.
+    """
 
     __tablename__ = "audit_logs"
 
@@ -39,9 +46,15 @@ class AuditLog(Base):
     entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     entity_id: Mapped[int | None] = mapped_column(Integer)
     details: Mapped[dict | None] = mapped_column(JSON)
+    project_id: Mapped[int | None] = mapped_column(Integer)
+    finding_id: Mapped[int | None] = mapped_column(Integer)
     timestamp: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False, default=utcnow)
 
     __table_args__ = (
         Index("ix_audit_logs_entity", "entity_type", "entity_id"),
         Index("ix_audit_logs_timestamp", "timestamp"),
+        Index("ix_audit_logs_user_id", "user_id"),
+        Index("ix_audit_logs_action", "action"),
+        Index("ix_audit_logs_project_id", "project_id"),
+        Index("ix_audit_logs_finding_id", "finding_id"),
     )

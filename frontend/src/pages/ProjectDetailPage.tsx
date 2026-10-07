@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Download, ExternalLink, FileText, GitCompare, Pencil, ScanLine, Trash, Upload } from 'lucide-react';
+import { exportService } from '../services/exportService';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
 import Button, { buttonClasses } from '../components/ui/Button';
@@ -21,6 +22,8 @@ import { dashboardService } from '../services/dashboardService';
 import { toApiError } from '../services/api';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { useAuth } from '../hooks/useAuth';
+import { PERMISSIONS } from '../utils/constants';
 import { formatDate, formatDateTime } from '../utils/format';
 import { ROUTES, comparePath, scanPath } from '../utils/routes';
 import type { Project } from '../types/project';
@@ -32,10 +35,13 @@ export default function ProjectDetailPage() {
   const { projectId } = useParams();
   const id = Number(projectId);
   const navigate = useNavigate();
+  const { can } = useAuth();
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
 
   const { data: project, loading, error, reload } = useApiQuery(() => projectService.get(id), [id]);
   useDocumentTitle(project?.name ?? 'Project');
@@ -97,27 +103,56 @@ export default function ProjectDetailPage() {
         description={project.application_name ?? undefined}
         actions={
           <>
-            <Link to={`${ROUTES.upload}?project=${project.id}`} className={buttonClasses('primary')}>
-              <Upload className="size-4" aria-hidden />
-              Upload report
-            </Link>
-            <Button variant="secondary" icon={<Pencil className="size-4" aria-hidden />} onClick={() => setEditOpen(true)}>
-              Edit
-            </Button>
+            {can(PERMISSIONS.reportsUpload) && (
+              <Link to={`${ROUTES.upload}?project=${project.id}`} className={buttonClasses('primary')}>
+                <Upload className="size-4" aria-hidden />
+                Upload report
+              </Link>
+            )}
             <Button
               variant="secondary"
-              icon={<Trash className="size-4" aria-hidden />}
-              onClick={() => {
-                setDeleteError(null);
-                setDeleteOpen(true);
+              icon={<FileText className="size-4" aria-hidden />}
+              loading={reportBusy}
+              onClick={async () => {
+                setReportBusy(true);
+                setReportError(null);
+                try {
+                  await exportService.projectReport(project.id);
+                } catch (err) {
+                  setReportError(toApiError(err).message);
+                } finally {
+                  setReportBusy(false);
+                }
               }}
             >
-              Delete
+              Project report
             </Button>
+            {can(PERMISSIONS.projectsWrite) && (
+              <Button variant="secondary" icon={<Pencil className="size-4" aria-hidden />} onClick={() => setEditOpen(true)}>
+                Edit
+              </Button>
+            )}
+            {can(PERMISSIONS.projectsDelete) && (
+              <Button
+                variant="secondary"
+                icon={<Trash className="size-4" aria-hidden />}
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeleteOpen(true);
+                }}
+              >
+                Delete
+              </Button>
+            )}
           </>
         }
       />
 
+      {reportError && (
+        <p role="alert" className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
+          {reportError}
+        </p>
+      )}
       <ProjectDashboard project={project} />
 
       <ProjectFormModal
