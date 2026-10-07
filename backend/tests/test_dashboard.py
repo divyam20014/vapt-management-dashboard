@@ -6,6 +6,11 @@ def test_summary_with_empty_database(client):
         "projects_by_status": [],
         "projects_by_environment": [],
         "recent_projects": [],
+        "scan_count": 0,
+        "failed_scan_count": 0,
+        "finding_count": 0,
+        "findings_by_severity": {"critical": 0, "high": 0, "medium": 0, "low": 0, "informational": 0, "unclassified": 0},
+        "recent_scans": [],
     }
 
 

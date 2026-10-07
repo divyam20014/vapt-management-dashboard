@@ -1,16 +1,18 @@
 import { useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ExternalLink, Pencil, ScanLine, ShieldCheck, Trash } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Pencil, ScanLine, ShieldCheck, Trash, Upload } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
-import Button from '../components/ui/Button';
+import Button, { buttonClasses } from '../components/ui/Button';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import EmptyState from '../components/states/EmptyState';
 import LoadingState from '../components/states/LoadingState';
 import ErrorState from '../components/states/ErrorState';
 import ProjectStatusBadge from '../components/projects/ProjectStatusBadge';
 import ProjectFormModal from '../components/projects/ProjectFormModal';
+import ScanList from '../components/scans/ScanList';
 import { projectService } from '../services/projectService';
+import { scanService } from '../services/scanService';
 import { toApiError } from '../services/api';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
@@ -89,6 +91,10 @@ export default function ProjectDetailPage() {
         description={project.application_name ?? undefined}
         actions={
           <>
+            <Link to={`${ROUTES.upload}?project=${project.id}`} className={buttonClasses('primary')}>
+              <Upload className="size-4" aria-hidden />
+              Upload report
+            </Link>
             <Button variant="secondary" icon={<Pencil className="size-4" aria-hidden />} onClick={() => setEditOpen(true)}>
               Edit
             </Button>
@@ -110,24 +116,17 @@ export default function ProjectDetailPage() {
         <Card title="Project details" className="lg:col-span-2">
           <ProjectDetails project={project} />
         </Card>
-        <div className="space-y-6">
-          <Card title="Scans">
-            <EmptyState
-              compact
-              icon={<ScanLine className="size-5" aria-hidden />}
-              title="No scans available"
-              description="Scans for this project will be listed here once report upload is available."
-            />
-          </Card>
-          <Card title="Findings">
-            <EmptyState
-              compact
-              icon={<ShieldCheck className="size-5" aria-hidden />}
-              title="No findings available"
-              description="Findings are created only from uploaded VAPT reports."
-            />
-          </Card>
-        </div>
+        <Card title="Findings">
+          <EmptyState
+            compact
+            icon={<ShieldCheck className="size-5" aria-hidden />}
+            title="Findings list not available yet"
+            description="Findings from uploaded reports are stored and counted on the dashboard. Browsing, filtering and status tracking come in the next phase."
+          />
+        </Card>
+      </div>
+      <div className="mt-6">
+        <ProjectScans projectId={project.id} />
       </div>
 
       <ProjectFormModal
@@ -154,6 +153,35 @@ export default function ProjectDetailPage() {
         onCancel={() => setDeleteOpen(false)}
       />
     </>
+  );
+}
+
+function ProjectScans({ projectId }: { projectId: number }) {
+  const { data, error, reload } = useApiQuery(() => scanService.listForProject(projectId), [projectId]);
+  return (
+    <Card title="Scans" description="Newest first" bodyClassName={data?.items.length ? '' : 'p-5'}>
+      {error ? (
+        <ErrorState title="Scans could not be loaded" message={error.message} onRetry={reload} />
+      ) : !data ? (
+        <LoadingState label="Loading scans…" />
+      ) : data.items.length === 0 ? (
+        <EmptyState
+          compact
+          icon={<ScanLine className="size-5" aria-hidden />}
+          title="No scans available"
+          description="Upload a VAPT report to this project to create its first scan."
+        />
+      ) : (
+        <>
+          <ScanList scans={data.items} />
+          {data.total > data.items.length && (
+            <p className="border-t border-slate-100 px-5 py-2 text-xs text-slate-500">
+              Showing the latest {data.items.length} of {data.total} scans.
+            </p>
+          )}
+        </>
+      )}
+    </Card>
   );
 }
 

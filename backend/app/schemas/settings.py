@@ -9,3 +9,4 @@ class AppSettingsRead(BaseModel):
     upload_location: str
     export_location: str
     max_upload_size_mb: int
+    allowed_extensions: list[str]

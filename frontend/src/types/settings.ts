@@ -6,4 +6,5 @@ export interface AppSettings {
   upload_location: string;
   export_location: string;
   max_upload_size_mb: number;
+  allowed_extensions: string[];
 }

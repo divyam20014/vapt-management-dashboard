@@ -1,0 +1,9 @@
+[swagger-api] [http] [info] http://juice:3000/api-docs/swagger.yaml [paths="/api-docs/swagger.yaml"]
+[http-missing-security-headers:strict-transport-security] [http] [info] http://juice:3000
+[http-missing-security-headers:content-security-policy] [http] [info] http://juice:3000
+[http-missing-security-headers:permissions-policy] [http] [info] http://juice:3000
+[http-missing-security-headers:x-permitted-cross-domain-policies] [http] [info] http://juice:3000
+[http-missing-security-headers:referrer-policy] [http] [info] http://juice:3000
+[http-missing-security-headers:cross-origin-embedder-policy] [http] [info] http://juice:3000
+[http-missing-security-headers:cross-origin-opener-policy] [http] [info] http://juice:3000
+[http-missing-security-headers:cross-origin-resource-policy] [http] [info] http://juice:3000

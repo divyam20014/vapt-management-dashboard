@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { renderApp } from '../test/render';
 import { dashboardService } from '../services/dashboardService';
 import { projectService } from '../services/projectService';
-import { pageOf } from '../test/fixtures';
+import { buildSummary, pageOf } from '../test/fixtures';
 
 vi.mock('../services/dashboardService');
 vi.mock('../services/projectService');
@@ -13,12 +13,7 @@ const NAV_LABELS = ['Dashboard', 'Projects', 'Findings', 'Critical & High', 'Sca
 
 describe('navigation', () => {
   beforeEach(() => {
-    vi.mocked(dashboardService.getSummary).mockResolvedValue({
-      project_count: 0,
-      projects_by_status: [],
-      projects_by_environment: [],
-      recent_projects: [],
-    });
+    vi.mocked(dashboardService.getSummary).mockResolvedValue(buildSummary());
     vi.mocked(projectService.list).mockResolvedValue(pageOf([]));
   });
 
@@ -40,10 +35,10 @@ describe('navigation', () => {
 
     await user.click(within(nav).getByRole('link', { name: 'Findings' }));
     expect(screen.getByRole('heading', { level: 1, name: 'Findings' })).toBeInTheDocument();
-    expect(screen.getByText('No findings available')).toBeInTheDocument();
+    expect(screen.getByText('Findings list not available yet')).toBeInTheDocument();
 
     await user.click(within(nav).getByRole('link', { name: 'Scans' }));
-    expect(screen.getByText('No scans available')).toBeInTheDocument();
+    expect(screen.getByText('Scan history view not available yet')).toBeInTheDocument();
   });
 
   it('quick action "New Project" opens the create form', async () => {

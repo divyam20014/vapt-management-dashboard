@@ -8,7 +8,7 @@ export default function ReportsPage() {
       description="Uploaded reports and generated exports."
       icon={<FileText className="size-5" aria-hidden />}
       emptyTitle="No reports available"
-      emptyDescription="Reports will be listed here once report upload and export are available."
+      emptyDescription="Generated exports and project reports are part of a later phase. Uploaded reports are listed as scans on each project page."
     />
   );
 }

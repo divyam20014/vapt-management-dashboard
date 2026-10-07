@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.errors import ConflictError, NotFoundError
-from app.models import Project, ProjectEnvironment, ProjectStatus
+from app.models import Project, ProjectEnvironment, ProjectStatus, Scan
 from app.schemas.project import ProjectCreate, ProjectUpdate
 
 logger = logging.getLogger(__name__)
@@ -112,6 +112,12 @@ def update_project(db: Session, project_id: int, data: ProjectUpdate) -> Project
 
 def delete_project(db: Session, project_id: int) -> None:
     project = get_project(db, project_id)
+    scan_count = db.scalar(select(func.count()).select_from(Scan).where(Scan.project_id == project_id)) or 0
+    if scan_count:
+        raise ConflictError(
+            f"This project has {scan_count} uploaded report(s) and cannot be deleted. "
+            "Archive it instead to keep its reports and findings."
+        )
     db.delete(project)
     db.commit()
     logger.info("Project deleted id=%s name=%r", project_id, project.name)

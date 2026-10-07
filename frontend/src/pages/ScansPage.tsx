@@ -7,8 +7,8 @@ export default function ScansPage() {
       title="Scans"
       description="History of uploaded VAPT reports, newest first."
       icon={<ScanLine className="size-5" aria-hidden />}
-      emptyTitle="No scans available"
-      emptyDescription="Every successfully processed report creates a scan record. Report upload is not available yet."
+      emptyTitle="Scan history view not available yet"
+      emptyDescription="The cross-project scan history view is part of a later phase. Recent scans are shown on the dashboard and on each project page."
     />
   );
 }

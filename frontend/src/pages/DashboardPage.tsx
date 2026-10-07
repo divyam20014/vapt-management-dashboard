@@ -1,10 +1,12 @@
 import { Link } from 'react-router-dom';
-import { Activity, FolderKanban, FolderOpen, Plus, ScanLine, ShieldCheck } from 'lucide-react';
+import { FolderKanban, FolderOpen, Plus, ScanLine, ShieldAlert, ShieldCheck, Upload } from 'lucide-react';
 import PageHeader from '../components/layout/PageHeader';
 import Card from '../components/ui/Card';
 import { buttonClasses } from '../components/ui/Button';
 import StatCard from '../components/dashboard/StatCard';
 import CountBarChart from '../components/charts/CountBarChart';
+import SeverityBarChart from '../components/charts/SeverityBarChart';
+import ScanList from '../components/scans/ScanList';
 import EmptyState from '../components/states/EmptyState';
 import LoadingState from '../components/states/LoadingState';
 import ErrorState from '../components/states/ErrorState';
@@ -12,14 +14,10 @@ import ProjectStatusBadge from '../components/projects/ProjectStatusBadge';
 import { dashboardService } from '../services/dashboardService';
 import { useApiQuery } from '../hooks/useApiQuery';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { PROJECT_STATUSES } from '../utils/constants';
-import { formatDate } from '../utils/format';
-import { NEW_PROJECT_PATH, projectPath } from '../utils/routes';
+import { SEVERITIES, SEVERITY_COUNT_KEYS, SEVERITY_STYLES } from '../utils/constants';
+import { formatDate, formatNumber } from '../utils/format';
+import { NEW_PROJECT_PATH, ROUTES, projectPath } from '../utils/routes';
 import type { DashboardSummary } from '../types/dashboard';
-
-function countFor(summary: DashboardSummary, status: string) {
-  return summary.projects_by_status.find((row) => row.label === status)?.count ?? 0;
-}
 
 export default function DashboardPage() {
   useDocumentTitle('Dashboard');
@@ -27,7 +25,7 @@ export default function DashboardPage() {
 
   return (
     <>
-      <PageHeader title="Dashboard" description="Overview of projects and VAPT activity, calculated from stored data." />
+      <PageHeader title="Dashboard" description="Overview of projects, scans and findings, calculated from stored data." />
 
       {loading && !summary && (
         <Card>
@@ -44,6 +42,13 @@ export default function DashboardPage() {
   );
 }
 
+const uploadLink = (
+  <Link to={ROUTES.upload} className={buttonClasses('primary')}>
+    <Upload className="size-4" aria-hidden />
+    Upload VAPT Report
+  </Link>
+);
+
 function DashboardContent({ summary }: { summary: DashboardSummary }) {
   if (summary.project_count === 0) {
     return (
@@ -51,7 +56,7 @@ function DashboardContent({ summary }: { summary: DashboardSummary }) {
         <EmptyState
           icon={<FolderKanban className="size-5" aria-hidden />}
           title="No projects yet"
-          description="Create a project for each application you test. Dashboard metrics are calculated from your stored projects, scans and findings."
+          description="Create a project for each application you test, then upload its VAPT reports. Dashboard metrics are calculated from that data."
           action={
             <Link to={NEW_PROJECT_PATH} className={buttonClasses('primary')}>
               <Plus className="size-4" aria-hidden />
@@ -63,36 +68,69 @@ function DashboardContent({ summary }: { summary: DashboardSummary }) {
     );
   }
 
+  const severity = summary.findings_by_severity;
+  const criticalHigh = severity.critical + severity.high;
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Projects" value={summary.project_count} icon={<FolderKanban className="size-5" aria-hidden />} />
-        {PROJECT_STATUSES.map((status) => (
-          <StatCard
-            key={status}
-            label={`${status} projects`}
-            value={countFor(summary, status)}
-            icon={<Activity className="size-5" aria-hidden />}
-          />
-        ))}
+        <StatCard
+          label="Scans"
+          value={summary.scan_count}
+          icon={<ScanLine className="size-5" aria-hidden />}
+          hint={summary.failed_scan_count ? `${summary.failed_scan_count} failed upload(s) not counted` : undefined}
+        />
+        <StatCard label="Findings" value={summary.finding_count} icon={<ShieldCheck className="size-5" aria-hidden />} />
+        <StatCard label="Critical & High" value={criticalHigh} icon={<ShieldAlert className="size-5" aria-hidden />} />
       </div>
 
+      {summary.finding_count > 0 && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          {SEVERITIES.map((level) => (
+            <div key={level} className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-xs">
+              <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                <span className={`size-2 rounded-full ${SEVERITY_STYLES[level].dot}`} aria-hidden />
+                {level}
+              </p>
+              <p className="mt-1 text-xl font-semibold tabular-nums text-slate-900" data-testid={`severity-${level}`}>
+                {formatNumber(severity[SEVERITY_COUNT_KEYS[level]])}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <Card title="Findings by severity" description="Critical, High, Medium, Low and Informational totals">
-          <EmptyState
-            compact
-            icon={<ShieldCheck className="size-5" aria-hidden />}
-            title="No findings available"
-            description="Severity totals, trends and top categories appear here once VAPT reports have been uploaded and parsed. Report upload is not available yet."
-          />
+        <Card title="Findings by severity" description="All projects, unique findings">
+          {summary.finding_count === 0 ? (
+            <EmptyState
+              compact
+              icon={<ShieldCheck className="size-5" aria-hidden />}
+              title="No findings available"
+              description="Severity totals appear here once VAPT reports have been uploaded."
+              action={uploadLink}
+            />
+          ) : (
+            <SeverityBarChart counts={severity} />
+          )}
         </Card>
-        <Card title="Recent scans" description="Latest uploaded VAPT reports">
-          <EmptyState
-            compact
-            icon={<ScanLine className="size-5" aria-hidden />}
-            title="No scans available"
-            description="Each uploaded report creates a scan record. Report upload is not available yet."
-          />
+        <Card
+          title="Recent scans"
+          description="Latest uploaded reports"
+          bodyClassName={summary.recent_scans.length ? '' : 'p-5'}
+        >
+          {summary.recent_scans.length === 0 ? (
+            <EmptyState
+              compact
+              icon={<ScanLine className="size-5" aria-hidden />}
+              title="No scans available"
+              description="Each uploaded report creates a scan record."
+              action={uploadLink}
+            />
+          ) : (
+            <ScanList scans={summary.recent_scans} showProject />
+          )}
         </Card>
       </div>
 
@@ -109,7 +147,7 @@ function DashboardContent({ summary }: { summary: DashboardSummary }) {
         title="Recently created projects"
         bodyClassName=""
         actions={
-          <Link to="/projects" className="text-sm font-medium text-teal-700 hover:text-teal-800">
+          <Link to={ROUTES.projects} className="text-sm font-medium text-teal-700 hover:text-teal-800">
             View all
           </Link>
         }

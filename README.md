@@ -4,8 +4,8 @@ A lightweight, local-first web application that QA and security teams use to man
 
 Uploaded reports are the source of truth. The application never invents findings, evidence or scores.
 
-> **Status: Phase 1 (Foundation).** Projects, the application shell, a dashboard built from real SQLite data, and Docker support are in place.
-> Report upload, parsing, findings, scans and exports are **not implemented yet**. Those screens show explicit empty states. See [Roadmap](#roadmap).
+> **Status: Phase 2 (Upload pipeline + ZAP/Nuclei).** You can create projects and upload OWASP ZAP and Nuclei reports. Uploads are validated, parsed, normalised and fingerprinted, then stored with their original file. The dashboard shows real scan and severity totals.
+> The findings workspace (list, filters, status changes), scan comparison, exports and authentication are **not implemented yet**. Those screens say so explicitly. See [Roadmap](#roadmap).
 
 ---
 
@@ -39,10 +39,11 @@ SQLite + local file storage    data/vapt.db, data/uploads/, exports/
 ├── backend/
 │   ├── app/
 │   │   ├── main.py          app factory, CORS, error handlers, SPA serving
-│   │   ├── api/             routers: health, projects, dashboard, settings
+│   │   ├── api/             routers: health, projects, scans (upload), dashboard, settings
 │   │   ├── core/            configuration, logging, error envelope
 │   │   ├── database/        engine, session, Base, UTC datetime type
 │   │   ├── models/          SQLAlchemy models and shared enums
+│   │   ├── parsers/         report detection, ZAP/Nuclei parsers, normalisation, fingerprints
 │   │   ├── schemas/         Pydantic request/response schemas
 │   │   └── services/        business logic and SQL aggregation
 │   ├── tests/               pytest suite (temporary SQLite per test)
@@ -61,6 +62,7 @@ SQLite + local file storage    data/vapt.db, data/uploads/, exports/
 │       └── __tests__/       Vitest suites
 ├── data/                    SQLite DB and uploaded reports (runtime, git-ignored)
 ├── exports/                 generated exports (runtime, git-ignored)
+├── sample-reports/          real scanner outputs used as test fixtures (not app data)
 ├── phase-prompts/           development phase specifications
 ├── Dockerfile, docker-compose.yml
 └── CLAUDE.md                project rules
@@ -85,6 +87,55 @@ SQLite tables are created automatically on first start. `data/`, `data/uploads/`
 | created_at / updated_at | DATETIME | stored as UTC |
 
 Indexes: unique index on `name`, plus `ix_projects_status` and `ix_projects_created_at`.
+
+### `scans`
+
+There is one row per uploaded report. Failed uploads are recorded too.
+
+Columns: `project_id`, `scan_name`, `scanner`, `report_type`, `original_filename`, `stored_file_path` (relative to `UPLOAD_DIRECTORY`, never returned by the API), `file_hash` (SHA-256), `scan_date` (from the report, else the date entered on upload, else NULL), `uploaded_at`, `processing_status` (`Completed`/`Failed`), `processing_error`, `total_findings`, and `critical_count` … `informational_count`.
+
+The severity counts cover the distinct findings seen in that scan.
+
+### `findings`
+
+There is one row per vulnerability per project, identified by `finding_key`.
+
+- **Columns:** the fields listed in `CLAUDE.md`, plus `source_metadata` (JSON) for scanner-specific values that have no column, such as ZAP confidence and WASC id, or Nuclei matcher name, type and tags.
+- **Unique constraint:** `(project_id, finding_key)`.
+- **Indexes:** project, scan, severity, status, finding_key, source_tool, endpoint.
+- **Immutable content:** content fields come from the report that first introduced the finding and are never overwritten.
+- **Missing values:** a value absent from the report is stored as NULL, never guessed.
+- **Severity:** `original_severity` keeps the report's own label. `normalized_severity` holds the standard level, or NULL when the label does not map (for example Nuclei `unknown`). NULL severities are reported as *Unclassified*.
+
+### `finding_occurrences`
+
+There is one row per finding per report record. Each row stores the observation verbatim: title, severity, URL, parameter, method, evidence, and `raw_record`, the complete original alert/instance or Nuclei result as JSON.
+
+### `potential_duplicates`
+
+This table holds pairs of findings that may describe the same issue. They are never merged automatically; `decision` starts as `Pending`.
+
+### Finding identity (fingerprint)
+
+`finding_key = SHA-256(project | source tool | check identity | endpoint | parameter | method)`
+
+| Input | Meaning |
+|---|---|
+| check identity | ZAP: `pluginid:alert name`, because the HTML report has no alertRef. Nuclei: `template-id[:matcher-name]`. |
+| endpoint | `scheme://host:port/path` with the query and fragment removed. |
+| method | Used for ZAP only. Nuclei's method is inferred from the raw request and is not part of identity. |
+
+Title wording alone is never used for identity. The same scan therefore produces identical keys in every export format: ZAP JSON = XML = HTML, and Nuclei JSON = JSONL = TXT.
+
+### Potential-duplicate rule
+
+A pair is flagged only when all of these hold:
+- The findings come from **different tools**. Within one scanner, its own check identity is trusted.
+- They have the same endpoint.
+- Parameter and method do not conflict. A value only conflicts when both reports provide it and the values differ.
+- Every key word of one title appears in the other, with at least two key words.
+
+A shared CWE raises confidence from Low to Medium. A shared CWE alone is not enough, because CWE-693, for example, covers many unrelated header checks.
 
 ## Installation and local run (Windows)
 
@@ -150,20 +201,50 @@ All endpoints are under `/api`, and the full OpenAPI documentation is at `/docs`
 | POST | `/api/projects` | Create a project |
 | GET | `/api/projects/{id}` | Get a project |
 | PUT | `/api/projects/{id}` | Update a project (only the fields sent are changed) |
-| DELETE | `/api/projects/{id}` | Delete a project |
-| GET | `/api/dashboard/summary` | Project count, counts by status and environment, and recent projects |
+| DELETE | `/api/projects/{id}` | Delete a project. Returns 409 if the project has uploaded reports; archive it instead. |
+| POST | `/api/scans/upload` | Upload a report (multipart: `project_id`, `file`, optional `scan_name`, `scan_date` (YYYY-MM-DD), `allow_duplicate`). Returns an analysis summary. |
+| GET | `/api/projects/{id}/scans` | A project's scans, newest first (paginated) |
+| GET | `/api/scans/{id}` | One scan |
+| GET | `/api/dashboard/summary` | Project, scan and finding counts, findings by severity, recent scans and recent projects |
 | GET | `/api/settings` | Read-only configuration summary |
 
 Paginated responses use this shape: `{"items": [...], "total": n, "page": n, "page_size": n}`.
 
-Errors use this shape: `{"error": {"code": "...", "message": "...", "details": [...]}}`. Stack traces and internal paths are never returned.
+Errors use this shape: `{"error": {"code": "...", "message": "...", "details": ...}}`. Stack traces and internal paths are never returned.
+
+Upload error codes:
+
+| HTTP | Code | When | Stored? |
+|---|---|---|---|
+| 400 | `invalid_upload` | Empty file, or a file name with path separators, a drive letter, `..` or control characters | Nothing |
+| 413 | `file_too_large` | Larger than `MAX_UPLOAD_SIZE_MB` | Nothing |
+| 415 | `unsupported_media_type` | Extension not allowed, content type mismatch, or binary/executable content | Nothing |
+| 409 | `duplicate_upload` | Identical bytes were already uploaded to this project. `details.existing_scan` is returned; resend with `allow_duplicate=true` to continue. | Nothing |
+| 422 | `parse_error` / `unsupported_report` | Malformed JSON, JSONL or XML; XML containing DTD or entities; a bad line; or a file that is not a ZAP/Nuclei report | Original file plus a `Failed` scan (`details.scan_id`). No findings. |
+| 500 | `processing_failed` | Database error while saving | The transaction is rolled back and the scan is marked `Failed` |
 
 ## Supported reports
 
-Report ingestion is not available yet. It is planned as follows:
+| Scanner | Formats | Notes |
+|---|---|---|
+| OWASP ZAP | JSON, XML, HTML (the "traditional" reports, e.g. from `zap-baseline.py -J/-x/-r`) | One finding per alert instance. HTML has no confidence or alertRef, so those stay empty. XML is parsed with `defusedxml`; DTDs and entities are rejected. |
+| Nuclei | JSON (`-je`), JSONL (`-jsonl`/`-jle`, also accepted as `.json`), TXT (`-o`) | Text output has no description, references, CWE or timestamps; the upload summary says so. |
 
-- OWASP ZAP (HTML, JSON, XML) and Nuclei (JSON, JSONL, TXT) in Phase 2.
-- Excel, CSV, PDF and generic JSON in Phase 5.
+Excel, CSV, PDF and generic JSON are planned for Phase 5.
+
+Original files are stored at `data/uploads/<project-id>/<YYYY-MM-DD>/<uuid>_<safe-name>` and are never modified or executed. Uploaded HTML is parsed as data only.
+
+### Adding a scanner
+
+1. Create `backend/app/parsers/<tool>.py` with a subclass of `BaseReportParser` (`parsers/base.py`). Set `scanner`, `report_type` and `extensions`.
+2. Implement the three methods:
+   - `can_parse(file)` — a cheap structural check that never raises.
+   - `parse(file)` — returns the raw records exactly as they appear in the report.
+   - `normalize(record)` — returns a `NormalizedFinding`. Copy only values that are present, and set `identity` to the tool's stable check id.
+3. Register an instance in `PARSERS` in `parsers/registry.py`. Add the scanner to the `Scanner` enum, and add the extension to `ALLOWED_EXTENSIONS` if it is new.
+4. Add a real report to `sample-reports/` and tests to `backend/tests/test_parsers.py`.
+
+No dashboard or database change is needed.
 
 ## Testing
 
@@ -184,14 +265,15 @@ npm run build     # type-check + production build
 |---|---|
 | Frontend shows "Unable to reach the server" | Start the backend on port 8000, or set `VITE_API_PROXY_TARGET` before `npm run dev`. |
 | CORS errors when the frontend is served from another origin | Add the origin to `CORS_ORIGINS`. |
-| Need a clean database | Stop the backend and delete `data/vapt.db`. It is recreated on the next start. |
+| Need a clean database | Stop the backend and delete `data/vapt.db` (and `data/uploads/`). It is recreated on the next start. |
+| Upload rejected as "not recognised" | Only the formats listed under *Supported reports* are accepted. For ZAP, use the traditional JSON/XML/HTML reports. |
 | Port already in use | `uvicorn app.main:app --reload --port 8001`, and set `VITE_API_PROXY_TARGET=http://localhost:8001`. |
 | Docker container restarts with `PermissionError: ... /app/data/uploads` | The `./data` bind mount is not writable. On **Docker Desktop for Windows**, the drive holding the repository must be shared with Docker (Settings → Resources → File sharing). Otherwise the mount appears as an empty, root-owned directory. On **Linux**, the container runs as UID 1000; run `sudo chown -R 1000:1000 data exports`. |
 
 ## Roadmap
 
 1. Foundation (done)
-2. Upload pipeline and ZAP/Nuclei parsers
+2. Upload pipeline and ZAP/Nuclei parsers (done)
 3. Findings management
 4. Scan history, comparison and full dashboard
 5. PDF/Excel/CSV parsers, exports and bulk upload

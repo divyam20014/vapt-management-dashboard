@@ -5,6 +5,7 @@ from fastapi import APIRouter, Request
 from app import __version__
 from app.core.config import REPO_ROOT, Settings
 from app.schemas.settings import AppSettingsRead
+from app.services.upload_validation import ALLOWED_EXTENSIONS
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -30,4 +31,5 @@ def get_app_settings(request: Request):
         upload_location=_display_location(settings.upload_path),
         export_location=_display_location(settings.export_path),
         max_upload_size_mb=settings.max_upload_size_mb,
+        allowed_extensions=list(ALLOWED_EXTENSIONS),
     )

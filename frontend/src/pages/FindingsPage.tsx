@@ -7,8 +7,8 @@ export default function FindingsPage() {
       title="Findings"
       description="Vulnerabilities extracted from uploaded VAPT reports."
       icon={<ShieldCheck className="size-5" aria-hidden />}
-      emptyTitle="No findings available"
-      emptyDescription="Findings are created only from uploaded VAPT reports. Report upload is not available yet."
+      emptyTitle="Findings list not available yet"
+      emptyDescription="Findings from uploaded reports are already stored and counted on the dashboard. The findings workspace (search, filters, status updates) is part of the next phase."
     />
   );
 }

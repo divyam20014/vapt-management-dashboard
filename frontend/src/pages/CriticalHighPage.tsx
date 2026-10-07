@@ -12,8 +12,8 @@ export default function CriticalHighPage() {
       title="Critical & High"
       description="Highest-risk findings across all projects."
       icon={<ShieldAlert className="size-5" aria-hidden />}
-      emptyTitle={`No ${label} findings available`}
-      emptyDescription="Findings are created only from uploaded VAPT reports. Report upload is not available yet."
+      emptyTitle={`${label} findings list not available yet`}
+      emptyDescription="Critical and High totals are shown on the dashboard. The filtered findings list is part of the next phase."
     />
   );
 }

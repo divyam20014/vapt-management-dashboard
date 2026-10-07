@@ -30,6 +30,7 @@ export function toApiError(error: unknown): ApiError {
       error.response.status,
       envelope.error?.code ?? 'http_error',
       toFieldErrors(envelope.error?.details),
+      envelope.error?.details ?? null,
     );
   }
   return new ApiError('An unexpected error occurred.', null, 'unknown_error');
